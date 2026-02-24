@@ -98,7 +98,7 @@ crust stop       # Stop crust
 
 ## Built-in Protection
 
-Crust ships with **14 path-based rules** and **19 DLP token-detection patterns** out of the box:
+Crust ships with **14 security rules** and **19 DLP token-detection patterns** out of the box:
 
 | Category | What's Protected |
 |----------|-----------------|

@@ -390,7 +390,9 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 	if proxyPort > 0 {
 		cfg.Server.Port = proxyPort
 	}
-	cfg.Telemetry.Enabled = telemetryEnabled
+	if telemetryEnabled {
+		cfg.Telemetry.Enabled = true
+	}
 	if retentionDays > 0 {
 		cfg.Telemetry.RetentionDays = retentionDays
 	}
@@ -551,17 +553,21 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 	log.Info("  API: %s", socketPath)
 
 	// Start server
+	serverErr := make(chan error, 1)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("Server error: %v", err)
-			os.Exit(1)
+			serverErr <- err
 		}
 	}()
 
-	// Wait for interrupt signal (os.Interrupt is portable across Unix and Windows)
+	// Wait for interrupt signal or server error
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
+	select {
+	case <-quit:
+	case err := <-serverErr:
+		log.Error("Server error: %v", err)
+	}
 
 	log.Info("Shutting down...")
 

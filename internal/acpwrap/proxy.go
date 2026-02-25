@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/rules"
@@ -94,16 +95,18 @@ type terminalCreateParams struct {
 	Cwd       string            `json:"cwd,omitempty"`
 }
 
+// shellSafe is the set of characters that don't need quoting in shell arguments.
+const shellSafe = "-_./:=+,"
+
 // shellQuote quotes a shell argument if it contains special characters.
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == '-' || c == '_' || c == '.' || c == '/' || c == ':' || c == '=' || c == '+' || c == ',') {
-			return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-		}
+	if strings.ContainsFunc(s, func(c rune) bool {
+		return !unicode.IsLetter(c) && !unicode.IsDigit(c) && !strings.ContainsRune(shellSafe, c)
+	}) {
+		return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 	}
 	return s
 }
@@ -115,7 +118,7 @@ func shellQuote(s string) string {
 // method has malformed params (caller should block).
 func acpMethodToToolCall(method string, params json.RawMessage) (rules.ToolCall, bool, error) {
 	// Reject nil/null params on security-relevant methods (json.Unmarshal silently
-	// zero-initialises the struct, which would produce an empty path and bypass rules).
+	// zero-initializes the struct, which would produce an empty path and bypass rules).
 	switch method {
 	case "fs/read_text_file", "fs/write_text_file", "terminal/create":
 		if len(params) == 0 || string(params) == "null" {
@@ -242,7 +245,9 @@ func runProxy(engine *rules.Engine, agentCmd []string, ideStdin io.ReadCloser, i
 
 	// Close IDE stdin to unblock the pipeIDEToAgent goroutine's scanner.
 	// In production this is os.Stdin; safe because crust exits immediately after.
-	ideStdin.Close()
+	if ideStdin != nil {
+		ideStdin.Close()
+	}
 
 	// Wait for pipe goroutines to finish draining
 	wg.Wait()
@@ -322,7 +327,7 @@ func pipeAgentToIDE(engine *rules.Engine, agentStdout io.Reader, ideStdout io.Wr
 
 		if parseErr != nil {
 			log.Warn("Blocked ACP %s: %v", msg.Method, parseErr)
-			sendBlockError(agentWriter, msg.ID, fmt.Sprintf("[Crust] Blocked: malformed params for %s", msg.Method))
+			sendBlockError(agentWriter, msg.ID, "[Crust] Blocked: malformed params for "+msg.Method)
 			continue
 		}
 

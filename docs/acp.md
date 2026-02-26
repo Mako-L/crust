@@ -17,9 +17,8 @@ crust acp-wrap -- goose acp
 |-------|---------|-------------|-------|
 | [Goose](https://github.com/block/goose) | `brew install block-goose-cli` | `goose acp` | Run `goose configure` first to set up your LLM provider |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm install -g @google/gemini-cli` | `gemini --experimental-acp` | Requires `GEMINI_API_KEY` or Google OAuth |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npx @zed-industries/claude-agent-acp@latest` | Managed by wrapper | Requires Claude Code installed |
 
-> **Important:** Each agent must be independently configured with its own LLM provider and API key before use with Crust. Crust wraps the agent for security — it does not provide the LLM backend. Not all agents expose a direct `acp` subcommand; some (like Codex and Claude Code) use wrapper packages. Check each agent's documentation for setup instructions.
+> **Important:** Each agent must be independently configured with its own LLM provider and API key before use with Crust. Crust wraps the agent for security — it does not provide the LLM backend. Check each agent's documentation for setup instructions.
 
 ## JetBrains IDEs (PhpStorm, IntelliJ, WebStorm, etc.)
 
@@ -90,48 +89,7 @@ Install the [ACP Client](https://marketplace.visualstudio.com/items?itemName=for
 }
 ```
 
-> The extension ships with default configs for many agents (Gemini, Claude Code, Codex, etc.) — replace the `command` and `args` to route through Crust.
-
-## Using OpenRouter
-
-Some agents can route LLM calls through [OpenRouter](https://openrouter.ai) via environment variables. The exact variable names depend on the agent:
-
-**Goose** uses `OPENAI_HOST` and `GOOSE_PROVIDER`:
-
-```json
-{
-  "agent_servers": {
-    "Goose via Crust (OpenRouter)": {
-      "command": "crust",
-      "args": ["acp-wrap", "--", "goose", "acp"],
-      "env": {
-        "GOOSE_PROVIDER": "openai",
-        "OPENAI_HOST": "https://openrouter.ai",
-        "OPENAI_API_KEY": "sk-or-v1-..."
-      }
-    }
-  }
-}
-```
-
-> **Caveat:** Goose may still require `goose configure` to be run first. Env-var-only provider configuration has not been fully verified. Check [Goose provider docs](https://block.github.io/goose/docs/getting-started/providers/) for the latest instructions.
-
-### Double-layer security
-
-For additional protection, run Crust's HTTP proxy in front of OpenRouter and point the agent at it:
-
-```bash
-crust start --endpoint https://openrouter.ai/api
-```
-
-```json
-"env": {
-  "OPENAI_HOST": "http://localhost:9090",
-  "OPENAI_API_KEY": "sk-or-v1-..."
-}
-```
-
-This applies Crust's security rules on both the ACP layer (file/terminal access) and the HTTP layer (tool calls in LLM responses).
+> The extension ships with default configs for many agents — replace the `command` and `args` to route through Crust.
 
 ## Other Editors
 

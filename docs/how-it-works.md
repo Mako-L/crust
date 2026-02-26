@@ -28,7 +28,7 @@ Layer 1 Rule Evaluation Order:
 
 **Layer 1 (Response Rules):** Scans LLM-generated tool_calls in responses. Fast pattern matching with friendly error messages.
 
-**ACP Mode (`crust acp-wrap`):** For IDEs using the [Agent Client Protocol](https://agentclientprotocol.com), Crust wraps the agent as a transparent stdio proxy. Tested with JetBrains IDEs (PhpStorm 2025.3). Security-relevant JSON-RPC messages (`fs/read_text_file`, `fs/write_text_file`, `terminal/create`) are intercepted and evaluated by the same rule engine. Blocked requests never reach the IDE — the agent receives a JSON-RPC error response instead.
+**ACP Mode (`crust acp-wrap`):** For IDEs using the [Agent Client Protocol](https://agentclientprotocol.com), Crust wraps the agent as a transparent stdio proxy. Supports JetBrains IDEs and other ACP-compatible editors. Security-relevant JSON-RPC messages (`fs/read_text_file`, `fs/write_text_file`, `terminal/create`) are intercepted and evaluated by the same rule engine. Blocked requests never reach the IDE — the agent receives a JSON-RPC error response instead. See [ACP setup guide](acp.md) for configuration details.
 
 ```text
 IDE (JetBrains / any ACP-compatible editor)
@@ -48,7 +48,7 @@ IDE (JetBrains / any ACP-compatible editor)
 └──────────────────────────────────────┘
   │ stdin/stdout
   ▼
-Real ACP Agent (Codex, Goose, etc.)
+Real ACP Agent (Goose, Gemini CLI, etc.)
 ```
 
 ---

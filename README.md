@@ -109,28 +109,10 @@ crust stop       # Stop crust
 For IDEs that use the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), Crust can wrap any ACP agent as a transparent stdio proxy — intercepting file reads, writes, and terminal commands before the IDE executes them. No changes to the agent or IDE required.
 
 ```bash
-crust acp-wrap -- codex acp
+crust acp-wrap -- goose acp
 ```
 
-Tested with JetBrains IDEs (PhpStorm 2025.3); other ACP-compatible editors should work but are not yet verified.
-
-<details>
-<summary><strong>JetBrains setup</strong> (<code>~/.jetbrains/acp.json</code>)</summary>
-
-```json
-{
-  "agent_servers": {
-    "Codex via Crust": {
-      "command": "crust",
-      "args": ["acp-wrap", "--", "codex", "acp"]
-    }
-  }
-}
-```
-
-Open **Settings → AI Assistant → Agents** or click **Add Custom Agent** in the AI Chat panel. See [JetBrains ACP docs](https://www.jetbrains.com/help/ai-assistant/acp.html) for details.
-
-</details>
+Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup guide](docs/acp.md) for step-by-step instructions including JetBrains config and OpenRouter support.
 
 ## Built-in Protection
 

@@ -185,7 +185,7 @@ func TestBuildUpstreamURL_EndpointMode(t *testing.T) {
 			wantPath: "/v1/chat/completions",
 		},
 		{
-			name:     "base path preserved for non-matching prefix /v1 vs /v1beta",
+			name:     "base /v1 with client /v1beta — no dedup, path appended",
 			upstream: "http://localhost:11434/v1",
 			reqPath:  "/v1beta/completions",
 			model:    "x",
@@ -223,6 +223,22 @@ func TestBuildUpstreamURL_EndpointMode(t *testing.T) {
 			model:    "gpt-4",
 			wantHost: "openrouter.ai",
 			wantPath: "/api/v1/chat/completions",
+		},
+		{
+			name:     "versioned provider path strips client /v1",
+			upstream: "https://open.bigmodel.cn/api/paas/v4",
+			reqPath:  "/v1/chat/completions",
+			model:    "glm-4-plus",
+			wantHost: "open.bigmodel.cn",
+			wantPath: "/api/paas/v4/chat/completions",
+		},
+		{
+			name:     "gemini v1beta/openai strips client /v1",
+			upstream: "https://generativelanguage.googleapis.com/v1beta/openai",
+			reqPath:  "/v1/chat/completions",
+			model:    "gemini-2.0-flash",
+			wantHost: "generativelanguage.googleapis.com",
+			wantPath: "/v1beta/openai/chat/completions",
 		},
 	}
 	for _, tt := range tests {
@@ -309,6 +325,30 @@ func TestBuildUpstreamURL_AutoMode(t *testing.T) {
 			wantHost: "api.anthropic.com",
 			wantPath: "/v1/messages",
 		},
+		{
+			name:     "glm strips client /v1 for versioned provider path",
+			upstream: "http://fallback:8080",
+			reqPath:  "/v1/chat/completions",
+			model:    "glm-4-plus",
+			wantHost: "open.bigmodel.cn",
+			wantPath: "/api/paas/v4/chat/completions",
+		},
+		{
+			name:     "gemini routes to v1beta/openai, strips client /v1",
+			upstream: "http://fallback:8080",
+			reqPath:  "/v1/chat/completions",
+			model:    "gemini-2.0-flash",
+			wantHost: "generativelanguage.googleapis.com",
+			wantPath: "/v1beta/openai/chat/completions",
+		},
+		{
+			name:     "gemini messages endpoint",
+			upstream: "http://fallback:8080",
+			reqPath:  "/v1/messages",
+			model:    "gemini-pro",
+			wantHost: "generativelanguage.googleapis.com",
+			wantPath: "/v1beta/openai/messages",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,6 +364,59 @@ func TestBuildUpstreamURL_AutoMode(t *testing.T) {
 			}
 			if got.Path != tt.wantPath {
 				t.Errorf("path = %q, want %q", got.Path, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestPathHasVersion(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"", false},
+		{"/", false},
+		{"/api/paas/v4", true},
+		{"/v1", true},
+		{"/v1/", true},
+		{"/compatible-mode", false},
+		{"/backend-api/codex", false},
+		{"/openai", false},
+		{"/v1beta", true},        // v + digit prefix (Gemini-style)
+		{"/v1beta/openai", true}, // Gemini OpenAI-compat path
+		{"/api/v1beta2", true},   // v + digit prefix
+		{"/api", false},
+		{"/anthropic", false},
+		{"/vendor", false},     // v but no digit after
+		{"/vpc/subnet", false}, // v but no digit after
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := pathHasVersion(tt.path); got != tt.want {
+				t.Errorf("pathHasVersion(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripLeadingVersion(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/v1/chat/completions", "/chat/completions"},
+		{"/v4/chat/completions", "/chat/completions"},
+		{"/v1/messages", "/messages"},
+		{"/v1", "/"},
+		{"/v1beta/completions", "/v1beta/completions"}, // not pure version
+		{"/chat/completions", "/chat/completions"},     // no version
+		{"/responses", "/responses"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := stripLeadingVersion(tt.input); got != tt.want {
+				t.Errorf("stripLeadingVersion(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

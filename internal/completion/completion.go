@@ -47,6 +47,7 @@ var command = &complete.Command{
 		"list-rules":   {Flags: map[string]complete.Predictor{"json": predict.Nothing, "api-addr": predict.Nothing}},
 		"reload-rules": {},
 		"lint-rules":   {Flags: map[string]complete.Predictor{"info": predict.Nothing}, Args: predict.Files("*.yaml")},
+		"doctor":       {Flags: map[string]complete.Predictor{"config": predict.Files("*.yaml"), "timeout": predict.Nothing, "retries": predict.Nothing, "report": predict.Nothing}},
 		"uninstall":    {},
 		"help":         {},
 		"completion":   {Flags: map[string]complete.Predictor{"install": predict.Nothing, "uninstall": predict.Nothing}},

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -88,6 +89,9 @@ func main() {
 			return
 		case "lint-rules":
 			runLintRules(os.Args[2:])
+			return
+		case "doctor":
+			runDoctor(os.Args[2:])
 			return
 		case "acp-wrap":
 			runAcpWrap(os.Args[2:])
@@ -727,6 +731,7 @@ func printUsage() {
 
 	fmt.Println(tui.Separator("Other"))
 	fmt.Print(tui.AlignColumns([][2]string{
+		{"crust doctor [--timeout 5s] [--report]", "Check provider endpoint connectivity"},
 		{"crust acp-wrap [flags] -- <cmd...>", "ACP stdio proxy with security rules"},
 		{"crust completion [--install]", "Install shell completion (bash/zsh/fish)"},
 		{"crust uninstall", "Uninstall crust completely"},
@@ -1080,6 +1085,141 @@ func runLintRules(args []string) {
 	} else {
 		tui.PrintSuccess("All rules valid")
 	}
+}
+
+// runDoctor handles the doctor subcommand — checks provider endpoint connectivity.
+func runDoctor(args []string) {
+	tui.WindowTitle("crust doctor")
+	doctorFlags := flag.NewFlagSet("doctor", flag.ExitOnError)
+	configPath := doctorFlags.String("config", config.DefaultConfigPath(), "Path to configuration file")
+	timeout := doctorFlags.Duration("timeout", 5*time.Second, "Timeout per provider check")
+	retries := doctorFlags.Int("retries", 1, "Retries for connection errors")
+	report := doctorFlags.Bool("report", false, "Generate a sanitized report for GitHub issues")
+	_ = doctorFlags.Parse(args)
+
+	// Load config for user-defined providers (no daemon needed)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	fmt.Println()
+	fmt.Println(tui.Separator("Provider Diagnostics"))
+	fmt.Println()
+
+	results := proxy.RunDoctor(proxy.DoctorOptions{
+		Timeout:       *timeout,
+		Retries:       *retries,
+		UserProviders: cfg.Upstream.Providers,
+	})
+
+	// Print each result
+	var okCount, warnCount, errCount int
+	for _, r := range results {
+		printDoctorResult(r)
+		switch r.Status {
+		case proxy.StatusOK:
+			okCount++
+		case proxy.StatusAuthError:
+			warnCount++
+		default:
+			errCount++
+		}
+	}
+
+	// Summary
+	fmt.Println()
+	switch {
+	case errCount > 0:
+		tui.PrintError(fmt.Sprintf("%d error(s), %d warning(s), %d ok", errCount, warnCount, okCount))
+	case warnCount > 0:
+		tui.PrintWarning(fmt.Sprintf("%d warning(s), %d ok", warnCount, okCount))
+	default:
+		tui.PrintSuccess(fmt.Sprintf("All %d providers ok", okCount))
+	}
+
+	if *report {
+		fmt.Println()
+		fmt.Println(buildDoctorReport(results, okCount, warnCount, errCount))
+	}
+}
+
+// printDoctorResult prints a single provider check result.
+func printDoctorResult(r proxy.DoctorResult) {
+	tag := r.Status.String()
+	latency := fmt.Sprintf("(%s)", r.Duration.Round(time.Millisecond))
+
+	if tui.IsPlainMode() {
+		name := r.Name
+		if r.IsUser {
+			name += " *"
+		}
+		fmt.Printf("  [%-4s]  %-14s %s\n", tag, name, r.URL)
+		fmt.Printf("          %s %s\n", r.Diagnosis, latency)
+		return
+	}
+
+	// Styled output
+	var icon string
+	var style lipgloss.Style
+	switch r.Status {
+	case proxy.StatusOK:
+		icon = tui.IconCheck
+		style = tui.StyleSuccess
+	case proxy.StatusAuthError:
+		icon = tui.IconWarning
+		style = tui.StyleWarning
+	default:
+		icon = tui.IconCross
+		style = tui.StyleError
+	}
+
+	// Pad raw name before styling so column width counts visible chars, not ANSI codes.
+	name := r.Name
+	if r.IsUser {
+		name += " *"
+	}
+	paddedName := fmt.Sprintf("%-14s", name)
+	fmt.Printf("  %s %s %s\n", style.Render(icon), tui.StyleBold.Render(paddedName), tui.Faint(r.URL))
+	fmt.Printf("    %s  %s %s\n", style.Render(tag), r.Diagnosis, tui.Faint(latency))
+	fmt.Println()
+}
+
+// buildDoctorReport generates a sanitized markdown report for GitHub issues.
+// Privacy: user-defined provider URLs are masked to host-only; API keys are
+// never included (DoctorResult doesn't carry them).
+func buildDoctorReport(results []proxy.DoctorResult, okCount, warnCount, errCount int) string {
+	var sb strings.Builder
+	sb.WriteString("## Crust Doctor Report\n\n")
+	sb.WriteString("```\n")
+	fmt.Fprintf(&sb, "Version: %s\n", Version)
+	fmt.Fprintf(&sb, "OS:      %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&sb, "Go:      %s\n", runtime.Version())
+	fmt.Fprintf(&sb, "Summary: %d ok, %d auth, %d error\n\n", okCount, warnCount, errCount)
+
+	fmt.Fprintf(&sb, "%-14s %-5s %4s  %-8s  %s\n", "PROVIDER", "STAT", "CODE", "LATENCY", "DIAGNOSIS")
+	fmt.Fprintf(&sb, "%-14s %-5s %4s  %-8s  %s\n", "--------", "----", "----", "-------", "---------")
+	for _, r := range results {
+		code := "-"
+		if r.StatusCode > 0 {
+			code = strconv.Itoa(r.StatusCode)
+		}
+		name := r.Name
+		diagnosis := r.Diagnosis
+		if r.IsUser {
+			name += " *"
+			// Sanitize diagnosis for user-defined providers:
+			// connection errors may embed the full URL.
+			diagnosis = r.Status.String()
+		}
+		fmt.Fprintf(&sb, "%-14s %-5s %4s  %-8s  %s\n",
+			name, r.Status, code,
+			r.Duration.Round(time.Millisecond).String(), diagnosis,
+		)
+	}
+	sb.WriteString("```\n")
+	sb.WriteString("\nPaste the block above into a GitHub issue at https://github.com/BakeLens/crust/issues/new\n")
+	return sb.String()
 }
 
 // runCompletion handles the completion subcommand

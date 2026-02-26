@@ -812,8 +812,13 @@ func (p *Proxy) buildUpstreamURL(reqPath, model string) (url.URL, string, error)
 			}
 			u.Scheme = resolvedURL.Scheme
 			u.Host = resolvedURL.Host
-			// path.Join concatenates provider path + request path and
-			// cleans the result (collapses double slashes, resolves dots).
+			// If the provider URL already contains an API version segment
+			// (e.g. /v4 in "open.bigmodel.cn/api/paas/v4"), strip the
+			// client's version prefix to avoid path duplication like
+			// /api/paas/v4/v1/chat/completions.
+			if pathHasVersion(resolvedURL.Path) {
+				reqPath = stripLeadingVersion(reqPath)
+			}
 			u.Path = path.Join(resolvedURL.Path, reqPath)
 			return u, result.APIKey, nil
 		}
@@ -831,9 +836,50 @@ func (p *Proxy) buildUpstreamURL(reqPath, model string) (url.URL, string, error)
 	if basePath != "" && strings.HasPrefix(reqPath, basePath+"/") {
 		u.Path = reqPath
 	} else {
+		if pathHasVersion(basePath) {
+			reqPath = stripLeadingVersion(reqPath)
+		}
 		u.Path = path.Join(u.Path, reqPath)
 	}
 	return u, "", nil
+}
+
+// pathHasVersion reports whether any segment of the URL path starts with
+// an API version prefix — "v" followed by at least one digit (e.g. "v1",
+// "v4", "v1beta", "v2alpha1").  This detects provider URLs such as
+// "open.bigmodel.cn/api/paas/v4" and "generativelanguage.googleapis.com/v1beta/openai".
+// When detected, the client's redundant /vN prefix is stripped by
+// stripLeadingVersion to avoid path duplication.
+func pathHasVersion(p string) bool {
+	for seg := range strings.SplitSeq(p, "/") {
+		if len(seg) >= 2 && seg[0] == 'v' && seg[1] >= '0' && seg[1] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// stripLeadingVersion removes a leading /vN segment from a request path.
+// e.g. "/v1/chat/completions" → "/chat/completions".
+// Returns the path unchanged if it does not start with a version segment.
+func stripLeadingVersion(p string) string {
+	if len(p) < 3 || p[0] != '/' || p[1] != 'v' {
+		return p
+	}
+	i := 2
+	for i < len(p) && p[i] >= '0' && p[i] <= '9' {
+		i++
+	}
+	if i == 2 {
+		return p // no digits after 'v'
+	}
+	if i >= len(p) {
+		return "/" // entire path was just "/vN"
+	}
+	if p[i] == '/' {
+		return p[i:]
+	}
+	return p // not a pure version segment (e.g. "/v1beta/...")
 }
 
 // extractUsageAndBody extracts token usage and body from response

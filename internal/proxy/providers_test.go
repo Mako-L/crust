@@ -45,7 +45,7 @@ func TestResolveProvider_BuiltinMatch(t *testing.T) {
 		{"o1-preview", "https://api.openai.com"},
 		{"o3-mini", "https://api.openai.com"},
 		{"o4-mini", "https://api.openai.com"},
-		{"gemini-pro", "https://generativelanguage.googleapis.com"},
+		{"gemini-pro", "https://generativelanguage.googleapis.com/v1beta/openai"},
 		{"llama-3.3-70b-versatile", "https://api.groq.com/openai"},
 		{"mistral-large", "https://api.mistral.ai"},
 		{"moonshot-v1-8k", "https://api.moonshot.ai"},

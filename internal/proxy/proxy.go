@@ -844,12 +844,15 @@ func (p *Proxy) buildUpstreamURL(reqPath, model string) (url.URL, string, error)
 	return u, "", nil
 }
 
-// pathHasVersion reports whether any segment of the URL path is a pure
-// API version like "v1", "v4" (letter 'v' followed by one or more digits).
-// This detects provider URLs such as "open.bigmodel.cn/api/paas/v4".
+// pathHasVersion reports whether any segment of the URL path starts with
+// an API version prefix — "v" followed by at least one digit (e.g. "v1",
+// "v4", "v1beta", "v2alpha1").  This detects provider URLs such as
+// "open.bigmodel.cn/api/paas/v4" and "generativelanguage.googleapis.com/v1beta/openai".
+// When detected, the client's redundant /vN prefix is stripped by
+// stripLeadingVersion to avoid path duplication.
 func pathHasVersion(p string) bool {
 	for seg := range strings.SplitSeq(p, "/") {
-		if len(seg) >= 2 && seg[0] == 'v' && isDigits(seg[1:]) {
+		if len(seg) >= 2 && seg[0] == 'v' && seg[1] >= '0' && seg[1] <= '9' {
 			return true
 		}
 	}
@@ -877,19 +880,6 @@ func stripLeadingVersion(p string) string {
 		return p[i:]
 	}
 	return p // not a pure version segment (e.g. "/v1beta/...")
-}
-
-// isDigits reports whether every byte in s is an ASCII digit.
-func isDigits(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for i := range len(s) {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // extractUsageAndBody extracts token usage and body from response

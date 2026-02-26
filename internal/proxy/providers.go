@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -23,13 +24,26 @@ var builtinProviders = map[string]config.ProviderConfig{
 	"qwen":         {URL: "https://dashscope.aliyuncs.com/compatible-mode"},
 	"moonshot":     {URL: "https://api.moonshot.ai"},
 	"kimi":         {URL: "https://api.moonshot.ai"},
-	"gemini":       {URL: "https://generativelanguage.googleapis.com"},
-	"glm":          {URL: "https://open.bigmodel.cn/api/paas/v4"},
-	"mistral":      {URL: "https://api.mistral.ai"},
-	"groq":         {URL: "https://api.groq.com/openai"},
-	"llama":        {URL: "https://api.groq.com/openai"},
-	"minimax":      {URL: "https://api.minimax.io/anthropic"},
-	"hf:":          {URL: "https://api.synthetic.new/anthropic"}, // HuggingFace
+	// Gemini's OpenAI-compatible endpoint is at /v1beta/openai/, not /v1/.
+	// With the default URL below, clients sending /v1/chat/completions get
+	// /v1/chat/completions which returns 404. Users must override this in
+	// config with the full base URL including the path prefix:
+	//   gemini: https://generativelanguage.googleapis.com/v1beta/openai
+	"gemini":  {URL: "https://generativelanguage.googleapis.com/v1beta/openai"},
+	"glm":     {URL: "https://open.bigmodel.cn/api/paas/v4"},
+	"mistral": {URL: "https://api.mistral.ai"},
+	"groq":    {URL: "https://api.groq.com/openai"},
+	"llama":   {URL: "https://api.groq.com/openai"},
+	"minimax": {URL: "https://api.minimax.io/anthropic"},
+	"hf:":     {URL: "https://api.synthetic.new/anthropic"}, // HuggingFace
+}
+
+// BuiltinProviders returns a copy of the builtin provider map.
+// Used by diagnostic tools (e.g., crust doctor) to enumerate all known providers.
+func BuiltinProviders() map[string]config.ProviderConfig {
+	result := make(map[string]config.ProviderConfig, len(builtinProviders))
+	maps.Copy(result, builtinProviders)
+	return result
 }
 
 // ResolveProvider resolves a model name to a provider config (URL + optional API key).

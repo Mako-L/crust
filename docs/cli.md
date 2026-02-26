@@ -20,7 +20,7 @@ crust remove-rule FILE                      # Remove user rules
 crust reload-rules                          # Force reload all rules
 crust lint-rules [FILE]                     # Validate rule syntax
 
-# ACP Proxy
+# ACP Proxy (see [ACP setup guide](acp.md))
 crust acp-wrap [flags] -- <cmd...>          # ACP stdio proxy with security rules
 
 # Diagnostics
@@ -117,6 +117,6 @@ crust doctor --timeout 3s --retries 0
 crust doctor --report              # sanitized report for GitHub issues
 
 # ACP proxy: wrap Codex for JetBrains/Zed
-crust acp-wrap -- codex acp
+crust acp-wrap -- goose acp
 crust acp-wrap --log-level debug -- goose acp
 ```

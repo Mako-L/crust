@@ -109,28 +109,10 @@ crust stop       # Stop crust
 For IDEs that use the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), Crust can wrap any ACP agent as a transparent stdio proxy — intercepting file reads, writes, and terminal commands before the IDE executes them. No changes to the agent or IDE required.
 
 ```bash
-crust acp-wrap -- codex acp
+crust acp-wrap -- goose acp
 ```
 
-Tested with JetBrains IDEs (PhpStorm 2025.3); other ACP-compatible editors should work but are not yet verified.
-
-<details>
-<summary><strong>JetBrains setup</strong> (<code>~/.jetbrains/acp.json</code>)</summary>
-
-```json
-{
-  "agent_servers": {
-    "Codex via Crust": {
-      "command": "crust",
-      "args": ["acp-wrap", "--", "codex", "acp"]
-    }
-  }
-}
-```
-
-Open **Settings → AI Assistant → Agents** or click **Add Custom Agent** in the AI Chat panel. See [JetBrains ACP docs](https://www.jetbrains.com/help/ai-assistant/acp.html) for details.
-
-</details>
+Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup guide](docs/acp.md) for step-by-step instructions.
 
 ## Built-in Protection
 
@@ -142,9 +124,9 @@ Crust ships with **14 security rules** and **19 DLP token-detection patterns** o
 | **System Auth** | `/etc/passwd`, `/etc/shadow`, sudoers |
 | **Shell History** | `.bash_history`, `.zsh_history`, `.python_history`, and more |
 | **Browser Data** | Chrome, Firefox, Safari passwords, cookies, local storage |
-| **Package Tokens** | npm, pip, Cargo, Composer, NuGet, Gem, Hex auth tokens |
-| **Git Credentials** | `.git-credentials`, `.gitconfig` with credentials |
-| **Persistence** | Shell RC files, `authorized_keys`, crontabs |
+| **Package Tokens** | npm, pip, Cargo, Composer, NuGet, Gem auth tokens |
+| **Git Credentials** | `.git-credentials`, `.config/git/credentials` |
+| **Persistence** | Shell RC files, `authorized_keys` |
 | **DLP Token Detection** | Content-based scanning for real API keys and tokens (AWS, GitHub, Stripe, OpenAI, Anthropic, and [14 more](docs/how-it-works.md#dlp-secret-detection)) |
 | **Key Exfiltration** | Content-based PEM private key detection |
 | **Self-Protection** | Agents cannot read, modify, or disable Crust itself |

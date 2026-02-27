@@ -28,28 +28,11 @@ Layer 1 Rule Evaluation Order:
 
 **Layer 1 (Response Rules):** Scans LLM-generated tool_calls in responses. Fast pattern matching with friendly error messages.
 
-**ACP Mode (`crust acp-wrap`):** For IDEs using the [Agent Client Protocol](https://agentclientprotocol.com), Crust wraps the agent as a transparent stdio proxy. Supports JetBrains IDEs and other ACP-compatible editors. Security-relevant JSON-RPC messages (`fs/read_text_file`, `fs/write_text_file`, `terminal/create`) are intercepted and evaluated by the same rule engine. Blocked requests never reach the IDE — the agent receives a JSON-RPC error response instead. See [ACP setup guide](acp.md) for configuration details.
+**[MCP Gateway](mcp.md) (`crust mcp-gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Intercepts `tools/call` and `resources/read` requests. Works with any MCP server (filesystem, database, custom).
 
-```text
-IDE (JetBrains / any ACP-compatible editor)
-  │ stdin/stdout (JSON-RPC 2.0)
-  ▼
-┌──────────────────────────────────────┐
-│           crust acp-wrap             │
-│                                      │
-│  Agent→IDE: inspect each request     │
-│    ├─ fs/read_text_file  → Evaluate  │
-│    ├─ fs/write_text_file → Evaluate  │
-│    ├─ terminal/create    → Evaluate  │
-│    └─ everything else    → pass      │
-│                                      │
-│  BLOCKED → JSON-RPC error to agent   │
-│  ALLOWED → forward to IDE unchanged  │
-└──────────────────────────────────────┘
-  │ stdin/stdout
-  ▼
-Real ACP Agent (Goose, Gemini CLI, etc.)
-```
+**[ACP Mode](acp.md) (`crust acp-wrap`):** Wraps [ACP](https://agentclientprotocol.com) agents as a transparent stdio proxy. Intercepts `fs/read_text_file`, `fs/write_text_file`, and `terminal/create` requests. Supports JetBrains IDEs and other ACP-compatible editors.
+
+**Auto-detect (`crust wrap`):** Inspects both MCP and ACP methods simultaneously. Method names are disjoint — no conflict.
 
 ---
 
@@ -91,19 +74,21 @@ Real ACP Agent (Goose, Gemini CLI, etc.)
 
 ## When Each Layer Blocks
 
-| Attack | Layer 0 | Layer 1 | ACP Mode |
-|--------|---------|---------|----------|
-| Bad agent with secrets in history | ✅ Blocked | - | - |
-| Poisoned conversation replay | ✅ Blocked | - | - |
-| LLM generates `cat .env` | - | ✅ Blocked | - |
-| LLM generates `rm -rf /etc` | - | ✅ Blocked | - |
-| `$(cat .env)` obfuscation | - | ✅ Blocked | - |
-| Symlink bypass | - | ✅ Blocked (composite) | - |
-| Leaking real API keys/tokens | - | ✅ Blocked (DLP) | ✅ Blocked (DLP) |
-| MCP plugin (e.g. Playwright) | - | ✅ Blocked (content-only) | - |
-| ACP agent reads `.env` via IDE | - | - | ✅ Blocked |
-| ACP agent reads SSH keys via IDE | - | - | ✅ Blocked |
-| ACP agent runs `cat /etc/shadow` | - | - | ✅ Blocked |
+| Attack | Layer 0 | Layer 1 | MCP Gateway | ACP Mode |
+|--------|---------|---------|-------------|----------|
+| Bad agent with secrets in history | ✅ Blocked | - | - | - |
+| Poisoned conversation replay | ✅ Blocked | - | - | - |
+| LLM generates `cat .env` | - | ✅ Blocked | - | - |
+| LLM generates `rm -rf /etc` | - | ✅ Blocked | - | - |
+| `$(cat .env)` obfuscation | - | ✅ Blocked | - | - |
+| Symlink bypass | - | ✅ Blocked (composite) | - | - |
+| Leaking real API keys/tokens | - | ✅ Blocked (DLP) | ✅ Blocked (DLP) | ✅ Blocked (DLP) |
+| MCP server reads `.env` | - | - | ✅ Blocked | - |
+| MCP server reads SSH keys | - | - | ✅ Blocked | - |
+| MCP `resources/read file:///etc/shadow` | - | - | ✅ Blocked | - |
+| ACP agent reads `.env` via IDE | - | - | - | ✅ Blocked |
+| ACP agent reads SSH keys via IDE | - | - | - | ✅ Blocked |
+| ACP agent runs `cat /etc/shadow` | - | - | - | ✅ Blocked |
 
 ---
 

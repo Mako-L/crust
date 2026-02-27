@@ -60,6 +60,26 @@ jobs:
       - name: Unit tests (with race detector)
         run: go test -race ./... -short
 
+  e2e:
+    name: E2E Tests (MCP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pre-install MCP filesystem server
+        run: npm install -g @modelcontextprotocol/server-filesystem
+
+      - name: E2E tests
+        run: go test ./internal/mcpgateway/... -v -run E2E -timeout 120s
+
   docker-test:
     name: Docker
     runs-on: ubuntu-latest

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BakeLens/crust/internal/acpwrap"
 	"github.com/BakeLens/crust/internal/jsonrpc"
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/mcpgateway"
@@ -42,7 +41,7 @@ func runInboundPipe(t *testing.T, input string) (fwd, errOut string) {
 	return fwdBuf.String(), errBuf.String()
 }
 
-// runOutboundPipe runs PipeInspect with ACPMethodToToolCall (outbound direction).
+// runOutboundPipe runs PipeInspect with BothMethodToToolCall (outbound direction).
 func runOutboundPipe(t *testing.T, input string) (fwd, errOut string) {
 	t.Helper()
 	engine := newTestEngine(t)
@@ -50,7 +49,7 @@ func runOutboundPipe(t *testing.T, input string) (fwd, errOut string) {
 	fwdWriter := jsonrpc.NewLockedWriter(&fwdBuf)
 	errWriter := jsonrpc.NewLockedWriter(&errBuf)
 	jsonrpc.PipeInspect(testLog, engine, strings.NewReader(input),
-		fwdWriter, errWriter, acpwrap.ACPMethodToToolCall, "ACP", "Outbound")
+		fwdWriter, errWriter, BothMethodToToolCall, "Stdio", "Outbound")
 	return fwdBuf.String(), errBuf.String()
 }
 
@@ -181,9 +180,10 @@ func TestPipeOutbound_ErrorShape(t *testing.T) {
 	}
 }
 
-// --- Cross-protocol: MCP is not blocked on outbound, ACP is not blocked on inbound ---
+// --- Cross-protocol ---
 
 func TestPipeInbound_IgnoresACPMethods(t *testing.T) {
+	// Inbound uses MCPMethodToToolCall only — ACP methods pass through unexamined.
 	msg := `{"jsonrpc":"2.0","id":1,"method":"fs/read_text_file","params":{"sessionId":"s1","path":"/app/.env"}}`
 	fwd, errOut := runInboundPipe(t, msg+"\n")
 	if fwd != msg+"\n" {
@@ -194,14 +194,61 @@ func TestPipeInbound_IgnoresACPMethods(t *testing.T) {
 	}
 }
 
-func TestPipeOutbound_IgnoresMCPMethods(t *testing.T) {
+func TestPipeOutbound_BlocksMCPMethods(t *testing.T) {
+	// Outbound uses BothMethodToToolCall — MCP methods with sensitive paths are blocked.
 	msg := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"/app/.env"}}}`
 	fwd, errOut := runOutboundPipe(t, msg+"\n")
-	if fwd != msg+"\n" {
-		t.Errorf("MCP methods should pass through in outbound direction\ngot:  %q\nwant: %q", fwd, msg+"\n")
+	if fwd != "" {
+		t.Errorf("MCP methods with .env should be blocked on outbound, got forwarded: %s", fwd)
 	}
-	if errOut != "" {
-		t.Errorf("should not generate errors for MCP methods in outbound direction, got: %s", errOut)
+	if errOut == "" {
+		t.Error("subprocess should receive an error response for blocked MCP method")
+	}
+}
+
+// --- Response DLP ---
+
+func TestPipeOutbound_ResponseDLP_BlocksSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+	}{
+		{"aws_key", `{"jsonrpc":"2.0","id":1,"result":{"content":"key=AKIAIOSFODNN7EXAMPLE"}}`},
+		{"github_token", `{"jsonrpc":"2.0","id":2,"result":{"text":"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm"}}`},
+		{"openai_key", `{"jsonrpc":"2.0","id":3,"result":{"config":"sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fwd, _ := runOutboundPipe(t, tt.msg+"\n")
+			// Response should NOT be forwarded (DLP blocks it)
+			if strings.Contains(fwd, "AKIA") || strings.Contains(fwd, "ghp_") || strings.Contains(fwd, "sk-proj-") {
+				t.Errorf("response with secret should be blocked by DLP, got forwarded: %s", fwd)
+			}
+		})
+	}
+}
+
+func TestPipeOutbound_ResponseDLP_PassesClean(t *testing.T) {
+	msg := `{"jsonrpc":"2.0","id":1,"result":{"content":"safe data, no secrets here"}}`
+	fwd, _ := runOutboundPipe(t, msg+"\n")
+	if fwd != msg+"\n" {
+		t.Errorf("clean response should pass through\ngot:  %q\nwant: %q", fwd, msg+"\n")
+	}
+}
+
+func TestPipeOutbound_ResponseDLP_ErrorResponseShape(t *testing.T) {
+	msg := `{"jsonrpc":"2.0","id":1,"result":{"content":"key=AKIAIOSFODNN7EXAMPLE"}}`
+	fwd, _ := runOutboundPipe(t, msg+"\n")
+	// fwd should contain a JSON-RPC error (sent to client via fwdWriter)
+	var resp jsonrpc.ErrorResponse
+	if err := json.Unmarshal(bytes.TrimSpace([]byte(fwd)), &resp); err != nil {
+		t.Fatalf("expected JSON-RPC error in fwd, got: %q", fwd)
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+	if !strings.Contains(resp.Error.Message, "[Crust]") {
+		t.Errorf("error message missing [Crust]: %s", resp.Error.Message)
 	}
 }
 
@@ -238,7 +285,7 @@ func TestRunProxy(t *testing.T) {
 				Log:          testLog,
 				ProcessLabel: "Subprocess",
 				Inbound:      jsonrpc.PipeConfig{Label: "Inbound", Protocol: "MCP", Convert: mcpgateway.MCPMethodToToolCall},
-				Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "ACP", Convert: acpwrap.ACPMethodToToolCall},
+				Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "Stdio", Convert: BothMethodToToolCall},
 			})
 		}()
 
@@ -266,7 +313,7 @@ func TestRunProxy(t *testing.T) {
 				Log:          testLog,
 				ProcessLabel: "Subprocess",
 				Inbound:      jsonrpc.PipeConfig{Label: "Inbound", Protocol: "MCP", Convert: mcpgateway.MCPMethodToToolCall},
-				Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "ACP", Convert: acpwrap.ACPMethodToToolCall},
+				Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "Stdio", Convert: BothMethodToToolCall},
 			})
 		}()
 

@@ -11,7 +11,6 @@ package autowrap
 import (
 	"os"
 
-	"github.com/BakeLens/crust/internal/acpwrap"
 	"github.com/BakeLens/crust/internal/jsonrpc"
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/mcpgateway"
@@ -27,7 +26,7 @@ func Run(engine *rules.Engine, cmd []string) int {
 		Log:          log,
 		ProcessLabel: "Subprocess",
 		Inbound:      jsonrpc.PipeConfig{Label: "Inbound", Protocol: "MCP", Convert: mcpgateway.MCPMethodToToolCall},
-		Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "ACP", Convert: acpwrap.ACPMethodToToolCall},
+		Outbound:     jsonrpc.PipeConfig{Label: "Outbound", Protocol: "Stdio", Convert: BothMethodToToolCall},
 		ExtraLogLines: []string{
 			"Auto-detect mode: inspecting both ACP and MCP methods",
 		},

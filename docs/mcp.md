@@ -1,6 +1,6 @@
 # MCP Gateway
 
-Crust can wrap any [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server as a transparent stdio proxy — intercepting `tools/call` and `resources/read` requests before they reach the server.
+Crust can wrap any [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server as a transparent stdio proxy — intercepting requests in both directions and scanning responses for leaked secrets.
 
 ```bash
 crust mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
@@ -15,22 +15,30 @@ MCP Client (Claude Desktop, IDE, etc.)
 ┌──────────────────────────────────────┐
 │         crust mcp-gateway            │
 │                                      │
-│  Client→Server: inspect each request │
+│  Client→Server (inbound):            │
 │    ├─ tools/call      → Evaluate     │
 │    ├─ resources/read  → Evaluate     │
 │    └─ everything else → pass         │
 │                                      │
-│  BLOCKED → JSON-RPC error to client  │
-│  ALLOWED → forward to server         │
+│  Server→Client (outbound):           │
+│    ├─ responses       → DLP scan     │
+│    ├─ server requests → Evaluate     │
+│    └─ everything else → pass         │
+│                                      │
+│  BLOCKED → JSON-RPC error            │
+│  ALLOWED → forward unchanged         │
 └──────────────────────────────────────┘
   │ stdin/stdout
   ▼
 Real MCP Server (filesystem, database, etc.)
 ```
 
-Crust evaluates every `tools/call` and `resources/read` request against the rule engine. Tool arguments (paths, commands, content) are extracted using **shape-based detection** — any tool with a `path` field is treated as file access, regardless of the tool name. This means Crust protects against novel tools without needing explicit configuration.
+Crust inspects both directions:
 
-Allowed requests pass through byte-for-byte unchanged. Blocked requests receive a JSON-RPC error response with code `-32001` and a `[Crust]`-prefixed message explaining the block.
+- **Inbound (Client→Server):** Evaluates `tools/call` and `resources/read` requests against path rules, DLP patterns, and content matching. Tool arguments are extracted using **shape-based detection** — any tool with a `path` field is treated as file access, regardless of the tool name.
+- **Outbound (Server→Client):** Scans server responses for leaked secrets using DLP patterns. If a server returns file content containing API keys or tokens, the response is blocked before it reaches the client.
+
+Allowed messages pass through byte-for-byte unchanged. Blocked messages receive a JSON-RPC error response with code `-32001` and a `[Crust]`-prefixed message explaining the block.
 
 ## Prerequisites
 
@@ -77,6 +85,8 @@ This inspects both MCP (inbound) and ACP (outbound) methods simultaneously. Sinc
 
 The same rules apply as the HTTP gateway and ACP modes. Security-relevant tool calls are evaluated against path rules, DLP patterns, and content matching:
 
+**Inbound (Client→Server):**
+
 | Scenario | Result |
 |----------|--------|
 | `tools/call read_text_file /app/main.go` | Allowed |
@@ -86,6 +96,15 @@ The same rules apply as the HTTP gateway and ACP modes. Security-relevant tool c
 | `resources/read file:///etc/shadow` | Blocked — system auth files |
 | `tools/call list_directory /app/src` | Allowed |
 | `initialize`, `tools/list`, notifications | Passed through unchanged |
+
+**Outbound (Server→Client) — Response DLP:**
+
+| Scenario | Result |
+|----------|--------|
+| Server returns file content with no secrets | Allowed |
+| Server returns content with AWS key (`AKIA...`) | Blocked — DLP detects API key |
+| Server returns content with GitHub token (`ghp_...`) | Blocked — DLP detects token |
+| Server returns content with Stripe key (`sk_live_...`) | Blocked — DLP detects secret |
 
 ## CLI Reference
 

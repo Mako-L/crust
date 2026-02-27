@@ -1,0 +1,531 @@
+package mcpgateway
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BakeLens/crust/internal/jsonrpc"
+)
+
+// skipE2E skips if -short or npx not available.
+func skipE2E(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("E2E: skipped in -short mode")
+	}
+	if _, err := exec.LookPath("npx"); err != nil {
+		t.Skip("E2E: npx not found in PATH")
+	}
+}
+
+// setupTestDir creates a temp directory with test files for the filesystem server.
+// It resolves symlinks so paths match on macOS (/var → /private/var).
+func setupTestDir(t *testing.T) string {
+	t.Helper()
+	raw := t.TempDir()
+	dir, err := filepath.EvalSymlinks(raw)
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for %s: %v", raw, err)
+	}
+
+	// Safe files
+	os.WriteFile(filepath.Join(dir, "safe.txt"), []byte("hello world"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
+	os.WriteFile(filepath.Join(dir, "subdir", "code.go"), []byte("package main"), 0o644)
+
+	// Sensitive files (should be blocked by Crust path rules)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET_KEY=sk-1234"), 0o644)
+	os.MkdirAll(filepath.Join(dir, ".ssh"), 0o700)
+	os.WriteFile(filepath.Join(dir, ".ssh", "id_rsa"), []byte("fake-private-key"), 0o600)
+
+	// Files with embedded secrets (should be blocked by response DLP)
+	// These files have innocent names but contain real API key patterns.
+	os.WriteFile(filepath.Join(dir, "config.txt"),
+		[]byte("# App config\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nREGION=us-east-1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "tokens.txt"),
+		[]byte("github_token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "notes.txt"),
+		[]byte("TODO: refactor auth module\nno secrets here"), 0o644)
+
+	return dir
+}
+
+// e2eResponse represents a parsed JSON-RPC response from the proxy output.
+type e2eResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// runMCPE2E runs the MCP proxy against the real filesystem server and returns
+// all JSON-RPC responses received by the client.
+func runMCPE2E(t *testing.T, dir string, messages []string) []e2eResponse {
+	t.Helper()
+	engine := newTestEngine(t)
+	input := strings.Join(messages, "\n") + "\n"
+	stdinR := io.NopCloser(strings.NewReader(input))
+	var stdout strings.Builder
+
+	done := make(chan int, 1)
+	go func() {
+		done <- jsonrpc.RunProxy(engine,
+			[]string{"npx", "-y", "@modelcontextprotocol/server-filesystem", dir},
+			stdinR, &stdout, jsonrpc.ProxyConfig{
+				Log:          testLog,
+				ProcessLabel: "MCP server",
+				Inbound:      jsonrpc.PipeConfig{Label: "Client->Server", Protocol: "MCP", Convert: MCPMethodToToolCall},
+				Outbound:     jsonrpc.PipeConfig{Label: "Server->Client", Protocol: "MCP", Convert: MCPMethodToToolCall},
+			})
+	}()
+
+	select {
+	case <-done:
+		return parseE2EResponses(t, stdout.String())
+	case <-time.After(30 * time.Second):
+		t.Fatal("E2E test timed out (30s)")
+		return nil
+	}
+}
+
+// parseE2EResponses parses JSONL output into e2eResponse structs.
+func parseE2EResponses(t *testing.T, output string) []e2eResponse {
+	t.Helper()
+	var responses []e2eResponse
+	for line := range strings.SplitSeq(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var resp e2eResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			t.Logf("skipping non-JSON line: %s", line)
+			continue
+		}
+		responses = append(responses, resp)
+	}
+	return responses
+}
+
+// findByID finds a response with the given integer ID.
+func findByID(responses []e2eResponse, id int) *e2eResponse {
+	target := fmt.Sprintf("%d", id)
+	for i := range responses {
+		if string(responses[i].ID) == target {
+			return &responses[i]
+		}
+	}
+	return nil
+}
+
+// initMessages returns the standard MCP handshake messages (initialize + initialized notification).
+func initMessages() []string {
+	return []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"crust-e2e","version":"1.0.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+	}
+}
+
+// --- E2E Tests ---
+
+func TestE2E_Initialize(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	responses := runMCPE2E(t, dir, initMessages()[:1]) // just initialize, no notification
+
+	resp := findByID(responses, 1)
+	if resp == nil {
+		t.Fatal("no response for initialize (id=1)")
+	}
+	if resp.Error != nil {
+		t.Fatalf("initialize returned error: %s", resp.Error.Message)
+	}
+
+	// Verify response has protocolVersion
+	var result map[string]any
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to parse init result: %v", err)
+	}
+	if _, ok := result["protocolVersion"]; !ok {
+		t.Error("initialize response missing protocolVersion")
+	}
+	if _, ok := result["capabilities"]; !ok {
+		t.Error("initialize response missing capabilities")
+	}
+	if _, ok := result["serverInfo"]; !ok {
+		t.Error("initialize response missing serverInfo")
+	}
+}
+
+func TestE2E_ToolsList(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 2)
+	if resp == nil {
+		t.Fatal("no response for tools/list (id=2)")
+	}
+	if resp.Error != nil {
+		t.Fatalf("tools/list returned error: %s", resp.Error.Message)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to parse tools/list result: %v", err)
+	}
+	tools, ok := result["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatal("tools/list returned no tools")
+	}
+
+	// Verify known tools exist
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		if m, ok := tool.(map[string]any); ok {
+			if name, ok := m["name"].(string); ok {
+				toolNames[name] = true
+			}
+		}
+	}
+	for _, want := range []string{"read_text_file", "write_file"} {
+		if !toolNames[want] {
+			t.Errorf("tools/list missing tool %q, got: %v", want, toolNames)
+		}
+	}
+}
+
+func TestE2E_ReadAllowed(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/safe.txt"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for read_text_file safe.txt (id=3)")
+	}
+	if resp.Error != nil {
+		t.Fatalf("read_text_file returned error: code=%d msg=%s", resp.Error.Code, resp.Error.Message)
+	}
+
+	// Verify the response contains the actual file content
+	if !strings.Contains(string(resp.Result), "hello world") {
+		t.Errorf("expected file content 'hello world' in response, got: %s", string(resp.Result))
+	}
+}
+
+func TestE2E_ReadBlocked_Env(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/.env"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for blocked .env read (id=3)")
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected Crust block error for .env read, got success: %s", string(resp.Result))
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+	if !strings.Contains(resp.Error.Message, "[Crust]") {
+		t.Errorf("error message missing [Crust] prefix: %s", resp.Error.Message)
+	}
+}
+
+func TestE2E_ReadBlocked_SSHKey(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/.ssh/id_rsa"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for blocked SSH key read (id=3)")
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected Crust block error for SSH key read, got success: %s", string(resp.Result))
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+}
+
+func TestE2E_WriteAllowed(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+	outFile := filepath.Join(dir, "output.txt")
+
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write_file","arguments":{"path":"%s","content":"written by e2e test"}}}`, outFile),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for write_file (id=3)")
+	}
+	if resp.Error != nil {
+		t.Fatalf("write_file returned error: code=%d msg=%s", resp.Error.Code, resp.Error.Message)
+	}
+
+	// Verify the file was actually written
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+	if string(content) != "written by e2e test" {
+		t.Errorf("file content = %q, want %q", string(content), "written by e2e test")
+	}
+}
+
+func TestE2E_WriteBlocked_Env(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+	envContent, _ := os.ReadFile(filepath.Join(dir, ".env"))
+
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"write_file","arguments":{"path":"%s/.env","content":"STOLEN=true"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for blocked .env write (id=3)")
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected Crust block error for .env write, got success: %s", string(resp.Result))
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+
+	// Verify the .env file was NOT modified
+	after, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	if string(after) != string(envContent) {
+		t.Errorf(".env was modified despite being blocked: %q → %q", envContent, after)
+	}
+}
+
+func TestE2E_MixedStream(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		// id=2: tools/list (allowed — not tools/call)
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+		// id=3: read .env (BLOCKED by inbound path rules)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/.env"}}}`, dir),
+		// id=4: read safe.txt (allowed)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/safe.txt"}}}`, dir),
+		// id=5: write .env (BLOCKED by inbound path rules)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"write_file","arguments":{"path":"%s/.env","content":"STOLEN"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	// id=1: initialize — should succeed
+	if r := findByID(responses, 1); r == nil || r.Error != nil {
+		t.Error("initialize (id=1) should succeed")
+	}
+
+	// id=2: tools/list — should succeed
+	if r := findByID(responses, 2); r == nil || r.Error != nil {
+		t.Error("tools/list (id=2) should succeed")
+	}
+
+	// id=3: read .env — should be blocked
+	if r := findByID(responses, 3); r == nil {
+		t.Error("expected response for blocked .env read (id=3)")
+	} else if r.Error == nil {
+		t.Error("read .env (id=3) should be blocked")
+	} else if r.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("read .env error code = %d, want %d", r.Error.Code, jsonrpc.BlockedError)
+	}
+
+	// id=4: read safe.txt — should succeed with content
+	if r := findByID(responses, 4); r == nil {
+		t.Error("expected response for safe.txt read (id=4)")
+	} else if r.Error != nil {
+		t.Errorf("read safe.txt (id=4) should succeed, got error: %s", r.Error.Message)
+	} else if !strings.Contains(string(r.Result), "hello world") {
+		t.Errorf("read safe.txt (id=4) missing content, got: %s", string(r.Result))
+	}
+
+	// id=5: write .env — should be blocked
+	if r := findByID(responses, 5); r == nil {
+		t.Error("expected response for blocked .env write (id=5)")
+	} else if r.Error == nil {
+		t.Error("write .env (id=5) should be blocked")
+	} else if r.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("write .env error code = %d, want %d", r.Error.Code, jsonrpc.BlockedError)
+	}
+}
+
+// --- Response DLP E2E Tests ---
+// These test the outbound direction: the REAL MCP server reads files with
+// innocent names but secret content. Crust's response DLP blocks the response
+// before it reaches the client.
+
+func TestE2E_ResponseDLP_AWSKey(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	// config.txt contains an AWS access key but is NOT a .env file
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/config.txt"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for config.txt read (id=3)")
+	}
+	// Response DLP should block: the server returned the file content which contains an AWS key
+	if resp.Error == nil {
+		t.Fatalf("expected DLP block for AWS key in config.txt, got success: %s", string(resp.Result))
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+	if !strings.Contains(resp.Error.Message, "[Crust]") {
+		t.Errorf("error message missing [Crust]: %s", resp.Error.Message)
+	}
+	if !strings.Contains(resp.Error.Message, "AWS") {
+		t.Errorf("error message should mention AWS: %s", resp.Error.Message)
+	}
+}
+
+func TestE2E_ResponseDLP_GitHubToken(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	// tokens.txt contains a GitHub personal access token
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/tokens.txt"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for tokens.txt read (id=3)")
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected DLP block for GitHub token in tokens.txt, got success: %s", string(resp.Result))
+	}
+	if resp.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.BlockedError)
+	}
+	if !strings.Contains(resp.Error.Message, "GitHub") {
+		t.Errorf("error message should mention GitHub: %s", resp.Error.Message)
+	}
+}
+
+func TestE2E_ResponseDLP_CleanFile(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	// notes.txt has no secrets — should pass through
+	messages := append(initMessages(),
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/notes.txt"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	resp := findByID(responses, 3)
+	if resp == nil {
+		t.Fatal("no response for notes.txt read (id=3)")
+	}
+	if resp.Error != nil {
+		t.Fatalf("notes.txt should pass DLP (no secrets), got error: code=%d msg=%s", resp.Error.Code, resp.Error.Message)
+	}
+	if !strings.Contains(string(resp.Result), "no secrets here") {
+		t.Errorf("expected file content in response, got: %s", string(resp.Result))
+	}
+}
+
+func TestE2E_ResponseDLP_MixedStream(t *testing.T) {
+	skipE2E(t)
+	dir := setupTestDir(t)
+
+	messages := append(initMessages(),
+		// id=2: read clean file (ALLOWED — passes both inbound and response DLP)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/notes.txt"}}}`, dir),
+		// id=3: read file with AWS key (BLOCKED by response DLP)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/config.txt"}}}`, dir),
+		// id=4: read .env (BLOCKED by inbound path rules — never reaches server)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/.env"}}}`, dir),
+		// id=5: read file with GitHub token (BLOCKED by response DLP)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/tokens.txt"}}}`, dir),
+		// id=6: read safe file (ALLOWED)
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"read_text_file","arguments":{"path":"%s/safe.txt"}}}`, dir),
+	)
+	responses := runMCPE2E(t, dir, messages)
+
+	// id=2: clean file — should pass
+	if r := findByID(responses, 2); r == nil {
+		t.Error("expected response for notes.txt (id=2)")
+	} else if r.Error != nil {
+		t.Errorf("notes.txt (id=2) should pass, got error: %s", r.Error.Message)
+	}
+
+	// id=3: AWS key in response — blocked by response DLP
+	if r := findByID(responses, 3); r == nil {
+		t.Error("expected response for config.txt (id=3)")
+	} else if r.Error == nil {
+		t.Error("config.txt (id=3) should be blocked by response DLP")
+	} else if r.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("config.txt error code = %d, want %d", r.Error.Code, jsonrpc.BlockedError)
+	}
+
+	// id=4: .env — blocked by inbound path rules
+	if r := findByID(responses, 4); r == nil {
+		t.Error("expected response for .env (id=4)")
+	} else if r.Error == nil {
+		t.Error(".env (id=4) should be blocked by inbound rules")
+	}
+
+	// id=5: GitHub token in response — blocked by response DLP
+	if r := findByID(responses, 5); r == nil {
+		t.Error("expected response for tokens.txt (id=5)")
+	} else if r.Error == nil {
+		t.Error("tokens.txt (id=5) should be blocked by response DLP")
+	} else if r.Error.Code != jsonrpc.BlockedError {
+		t.Errorf("tokens.txt error code = %d, want %d", r.Error.Code, jsonrpc.BlockedError)
+	}
+
+	// id=6: safe file — should pass
+	if r := findByID(responses, 6); r == nil {
+		t.Error("expected response for safe.txt (id=6)")
+	} else if r.Error != nil {
+		t.Errorf("safe.txt (id=6) should pass, got error: %s", r.Error.Message)
+	} else if !strings.Contains(string(r.Result), "hello world") {
+		t.Errorf("safe.txt (id=6) missing content, got: %s", string(r.Result))
+	}
+}

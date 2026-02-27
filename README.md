@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://getcrust.io">Website</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#mcp-gateway">MCP</a> •
   <a href="#acp-integration">ACP</a> •
   <a href="#built-in-protection">Protection</a> •
   <a href="#how-it-works">How It Works</a> •
@@ -104,6 +105,16 @@ crust doctor     # Diagnose provider endpoints
 crust stop       # Stop crust
 ```
 
+## MCP Gateway
+
+For [MCP](https://modelcontextprotocol.io) servers, Crust intercepts `tools/call` and `resources/read` requests before they reach the server.
+
+```bash
+crust mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
+```
+
+Works with any MCP server. See the [MCP setup guide](docs/mcp.md) for details and examples.
+
 ## ACP Integration
 
 For IDEs that use the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), Crust can wrap any ACP agent as a transparent stdio proxy — intercepting file reads, writes, and terminal commands before the IDE executes them. No changes to the agent or IDE required.
@@ -170,23 +181,31 @@ Crust inspects tool calls at multiple layers:
 
 1. **Layer 0 (Request Scan)**: Scans tool calls in conversation history before they reach the LLM — catches agents replaying dangerous actions.
 2. **Layer 1 (Response Scan)**: Scans tool calls in the LLM's response before they execute — blocks new dangerous actions in real-time.
-3. **ACP Mode**: Wraps ACP agents as a stdio proxy, intercepting JSON-RPC file/terminal requests before the IDE executes them.
+3. **Stdio Proxy** ([MCP](docs/mcp.md) / [ACP](docs/acp.md)): Wraps MCP servers or ACP agents as a stdio proxy, intercepting security-relevant JSON-RPC messages in both directions — including DLP scanning of server responses for leaked secrets.
 
-Layers 0–1 apply a [10-step evaluation pipeline](docs/how-it-works.md) — input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path-based rules, and fallback content matching — each step in microseconds. ACP mode reuses the same rule engine.
+All modes apply a [10-step evaluation pipeline](docs/how-it-works.md) — input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path-based rules, and fallback content matching — each step in microseconds.
 
 All activity is logged locally to encrypted storage.
 
 ## Documentation
 
+**Setup**
+
 | Guide | Description |
 |-------|-------------|
-| [Configuration](docs/configuration.md) | `config.yaml`, providers, auto mode, block modes |
+| [Configuration](docs/configuration.md) | Providers, auto mode, block modes |
+| [MCP Gateway](docs/mcp.md) | Stdio proxy for [MCP](https://modelcontextprotocol.io) servers — Claude Desktop, custom servers |
+| [ACP Integration](docs/acp.md) | Stdio proxy for [ACP](https://agentclientprotocol.com) agents — JetBrains, VS Code |
+| [Docker](docs/docker.md) | Dockerfile, docker-compose, container setup |
+
+**Reference**
+
+| Guide | Description |
+|-------|-------------|
 | [CLI Reference](docs/cli.md) | Commands, flags, environment variables |
-| [How It Works](docs/how-it-works.md) | Architecture, rule schema, protection categories |
-| [Docker](docs/docker.md) | Dockerfile, docker-compose, TUI in containers |
-| [Shell Parsing](docs/shell-parsing.md) | How Bash commands are parsed for path and command extraction |
-| [Migration](docs/migration.md) | Upgrade guides for breaking changes between versions |
-| [TUI Design](docs/tui.md) | Terminal UI internals, plain mode, Docker behavior |
+| [How It Works](docs/how-it-works.md) | Architecture, rule engine, evaluation pipeline |
+| [Shell Parsing](docs/shell-parsing.md) | Bash command parsing for path/command extraction |
+| [Migration](docs/migration.md) | Upgrade guides for breaking changes |
 
 ## Build from Source
 

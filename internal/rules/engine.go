@@ -793,6 +793,43 @@ func (e *Engine) GetLoader() *Loader {
 	return e.loader
 }
 
+// ScanDLP runs DLP (Data Loss Prevention) patterns against content.
+// Returns a non-nil MatchResult if a secret is detected, nil if clean.
+// This is used by PipeInspect to scan server responses for leaked secrets.
+func (e *Engine) ScanDLP(content string) *MatchResult {
+	if content == "" {
+		return nil
+	}
+	// Tier 1: hardcoded patterns (fast, always available)
+	for _, pat := range dlpPatterns {
+		if pat.re.MatchString(content) {
+			return &MatchResult{
+				Matched:  true,
+				RuleName: pat.name,
+				Severity: SeverityCritical,
+				Action:   ActionBlock,
+				Message:  pat.message,
+			}
+		}
+	}
+	// Tier 2: gitleaks (if available)
+	if findings := e.dlpScanner.Scan(content); len(findings) > 0 {
+		f := findings[0]
+		msg := "Blocked secret — " + f.Description
+		if len(findings) > 1 {
+			msg += fmt.Sprintf(" (and %d more)", len(findings)-1)
+		}
+		return &MatchResult{
+			Matched:  true,
+			RuleName: "builtin:dlp-gitleaks-" + f.RuleID,
+			Severity: SeverityHigh,
+			Action:   ActionBlock,
+			Message:  msg,
+		}
+	}
+	return nil
+}
+
 // RuleValidationResult holds per-rule validation results.
 type RuleValidationResult struct {
 	Name  string `json:"name"`

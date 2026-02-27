@@ -28,28 +28,11 @@ Layer 1 Rule Evaluation Order:
 
 **Layer 1 (Response Rules):** Scans LLM-generated tool_calls in responses. Fast pattern matching with friendly error messages.
 
-**ACP Mode (`crust acp-wrap`):** For IDEs using the [Agent Client Protocol](https://agentclientprotocol.com), Crust wraps the agent as a transparent stdio proxy. Supports JetBrains IDEs and other ACP-compatible editors. Security-relevant JSON-RPC messages (`fs/read_text_file`, `fs/write_text_file`, `terminal/create`) are intercepted and evaluated by the same rule engine. Blocked requests never reach the IDE — the agent receives a JSON-RPC error response instead. See [ACP setup guide](acp.md) for configuration details.
+**[MCP Gateway](mcp.md) (`crust mcp-gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Inspects both directions — client→server requests (`tools/call`, `resources/read`) and server→client responses (DLP secret scanning). Works with any MCP server (filesystem, database, custom).
 
-```text
-IDE (JetBrains / any ACP-compatible editor)
-  │ stdin/stdout (JSON-RPC 2.0)
-  ▼
-┌──────────────────────────────────────┐
-│           crust acp-wrap             │
-│                                      │
-│  Agent→IDE: inspect each request     │
-│    ├─ fs/read_text_file  → Evaluate  │
-│    ├─ fs/write_text_file → Evaluate  │
-│    ├─ terminal/create    → Evaluate  │
-│    └─ everything else    → pass      │
-│                                      │
-│  BLOCKED → JSON-RPC error to agent   │
-│  ALLOWED → forward to IDE unchanged  │
-└──────────────────────────────────────┘
-  │ stdin/stdout
-  ▼
-Real ACP Agent (Goose, Gemini CLI, etc.)
-```
+**[ACP Mode](acp.md) (`crust acp-wrap`):** Wraps [ACP](https://agentclientprotocol.com) agents as a transparent stdio proxy. Intercepts `fs/read_text_file`, `fs/write_text_file`, and `terminal/create` requests. Supports JetBrains IDEs and other ACP-compatible editors.
+
+**Auto-detect (`crust wrap`):** Inspects both MCP and ACP methods in both directions. Response DLP scans all server responses for leaked secrets. Method names are disjoint — no conflict.
 
 ---
 
@@ -91,25 +74,31 @@ Real ACP Agent (Goose, Gemini CLI, etc.)
 
 ## When Each Layer Blocks
 
-| Attack | Layer 0 | Layer 1 | ACP Mode |
-|--------|---------|---------|----------|
-| Bad agent with secrets in history | ✅ Blocked | - | - |
-| Poisoned conversation replay | ✅ Blocked | - | - |
-| LLM generates `cat .env` | - | ✅ Blocked | - |
-| LLM generates `rm -rf /etc` | - | ✅ Blocked | - |
-| `$(cat .env)` obfuscation | - | ✅ Blocked | - |
-| Symlink bypass | - | ✅ Blocked (composite) | - |
-| Leaking real API keys/tokens | - | ✅ Blocked (DLP) | ✅ Blocked (DLP) |
-| MCP plugin (e.g. Playwright) | - | ✅ Blocked (content-only) | - |
-| ACP agent reads `.env` via IDE | - | - | ✅ Blocked |
-| ACP agent reads SSH keys via IDE | - | - | ✅ Blocked |
-| ACP agent runs `cat /etc/shadow` | - | - | ✅ Blocked |
+| Attack | Layer 0 | Layer 1 | MCP Gateway | ACP Mode |
+|--------|---------|---------|-------------|----------|
+| Bad agent with secrets in history | ✅ Blocked | - | - | - |
+| Poisoned conversation replay | ✅ Blocked | - | - | - |
+| LLM generates `cat .env` | - | ✅ Blocked | - | - |
+| LLM generates `rm -rf /etc` | - | ✅ Blocked | - | - |
+| `$(cat .env)` obfuscation | - | ✅ Blocked | - | - |
+| Symlink bypass | - | ✅ Blocked (composite) | - | - |
+| Leaking real API keys/tokens | - | ✅ Blocked (DLP) | ✅ Blocked (DLP) | ✅ Blocked (DLP) |
+| MCP client reads `.env` | - | - | ✅ Blocked (inbound) | - |
+| MCP client reads SSH keys | - | - | ✅ Blocked (inbound) | - |
+| MCP `resources/read file:///etc/shadow` | - | - | ✅ Blocked (inbound) | - |
+| MCP server returns API keys in results | - | - | ✅ Blocked (response DLP) | - |
+| MCP server returns tokens in results | - | - | ✅ Blocked (response DLP) | - |
+| ACP agent reads `.env` via IDE | - | - | - | ✅ Blocked |
+| ACP agent reads SSH keys via IDE | - | - | - | ✅ Blocked |
+| ACP agent runs `cat /etc/shadow` | - | - | - | ✅ Blocked |
 
 ---
 
 ## DLP Secret Detection
 
 Step 7 of the evaluation pipeline runs hardcoded DLP (Data Loss Prevention) patterns against all operations. These patterns detect real API keys and tokens by their format, regardless of file path or tool name.
+
+In stdio proxy modes (MCP Gateway, ACP Wrap, Auto-detect), DLP also scans **server/agent responses** before they reach the client. This catches secrets leaked by the subprocess — for example, an MCP server returning file content that contains an AWS access key. The response is replaced with a JSON-RPC error so the secret never reaches the client.
 
 | Provider | Pattern |
 |----------|---------|

@@ -22,6 +22,7 @@ Thumbs.db
 
 # VHS recordings (keep only GIF)
 docs/*.webm
+docs/*.mp4
 
 # Agent test local config (contains API keys)
 tests/agents/config.local.yaml

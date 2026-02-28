@@ -476,7 +476,7 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 				}
 			}
 
-			// Tier 3: Crypto-specific DLP (checksum-validated).
+			// Crypto-specific DLP (checksum-validated).
 			if m := scanCrypto(dlpContent); m != nil {
 				return MatchResult{
 					Matched:  true,
@@ -880,7 +880,17 @@ func (e *Engine) ScanDLP(content string) *MatchResult {
 			}
 		}
 	}
-	// Tier 2: gitleaks (if available)
+	// Tier 2: crypto-specific DLP (checksum-validated)
+	if m := scanCrypto(content); m != nil {
+		return &MatchResult{
+			Matched:  true,
+			RuleName: m.name,
+			Severity: SeverityCritical,
+			Action:   ActionBlock,
+			Message:  m.message,
+		}
+	}
+	// Tier 3: gitleaks (if available)
 	if findings := e.dlpScanner.Scan(content); len(findings) > 0 {
 		f := findings[0]
 		msg := "Blocked secret — " + f.Description

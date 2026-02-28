@@ -10,14 +10,8 @@ rules:
     severity: critical
 
   - name: protect-ssh-keys
-    block:
-      - "/Users/*/.ssh/id_*"
-      - "/home/*/.ssh/id_*"
-      - "C:/Users/*/.ssh/id_*"
-    except:
-      - "/Users/*/.ssh/id_*.pub"
-      - "/home/*/.ssh/id_*.pub"
-      - "C:/Users/*/.ssh/id_*.pub"
+    block: "$HOME/.ssh/id_*"
+    except: "$HOME/.ssh/id_*.pub"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access SSH private keys"
     severity: critical
@@ -52,36 +46,16 @@ rules:
   # ===========================================================================
   - name: protect-shell-history
     block:
-      # macOS
-      - "/Users/*/.bash_history"
-      - "/Users/*/.zsh_history"
-      - "/Users/*/.sh_history"
-      - "/Users/*/.history"
-      - "/Users/*/.python_history"
-      - "/Users/*/.node_repl_history"
-      - "/Users/*/.mysql_history"
-      - "/Users/*/.psql_history"
-      - "/Users/*/.sqlite_history"
-      - "/Users/*/.lesshst"
-      # Linux
-      - "/home/*/.bash_history"
-      - "/home/*/.zsh_history"
-      - "/home/*/.sh_history"
-      - "/home/*/.history"
-      - "/home/*/.python_history"
-      - "/home/*/.node_repl_history"
-      - "/home/*/.mysql_history"
-      - "/home/*/.psql_history"
-      - "/home/*/.sqlite_history"
-      - "/home/*/.lesshst"
-      # Linux root
-      - "/root/.bash_history"
-      - "/root/.zsh_history"
-      - "/root/.sh_history"
-      - "/root/.history"
-      # Windows (Git Bash / WSL)
-      - "C:/Users/*/.bash_history"
-      - "C:/Users/*/.zsh_history"
+      - "$HOME/.bash_history"
+      - "$HOME/.zsh_history"
+      - "$HOME/.sh_history"
+      - "$HOME/.history"
+      - "$HOME/.python_history"
+      - "$HOME/.node_repl_history"
+      - "$HOME/.mysql_history"
+      - "$HOME/.psql_history"
+      - "$HOME/.sqlite_history"
+      - "$HOME/.lesshst"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access shell history files"
     severity: high
@@ -91,36 +65,21 @@ rules:
   # ===========================================================================
   - name: protect-cloud-credentials
     block:
-      # AWS (~/.aws/)
-      - "/Users/*/.aws/credentials"
-      - "/Users/*/.aws/config"
-      - "/home/*/.aws/credentials"
-      - "/home/*/.aws/config"
-      - "C:/Users/*/.aws/credentials"
-      - "C:/Users/*/.aws/config"
-      # Google Cloud (~/.config/gcloud/)
-      - "/Users/*/.config/gcloud/**"
-      - "/home/*/.config/gcloud/**"
-      - "C:/Users/*/.config/gcloud/**"
-      # Azure (~/.azure/)
-      - "/Users/*/.azure/**"
-      - "/home/*/.azure/**"
-      - "C:/Users/*/.azure/**"
-      # Kubernetes (~/.kube/)
-      - "/Users/*/.kube/config"
-      - "/Users/*/.kube/cache/**"
-      - "/home/*/.kube/config"
-      - "/home/*/.kube/cache/**"
-      - "C:/Users/*/.kube/config"
-      - "C:/Users/*/.kube/cache/**"
-      # Docker (~/.docker/)
-      - "/Users/*/.docker/config.json"
-      - "/home/*/.docker/config.json"
-      - "C:/Users/*/.docker/config.json"
-      # Terraform (~/.terraform.d/ is home-only; .tfstate is project-scoped)
-      - "/Users/*/.terraform.d/credentials.tfrc.json"
-      - "/home/*/.terraform.d/credentials.tfrc.json"
-      - "C:/Users/*/.terraform.d/credentials.tfrc.json"
+      # AWS
+      - "$HOME/.aws/credentials"
+      - "$HOME/.aws/config"
+      # Google Cloud
+      - "$HOME/.config/gcloud/**"
+      # Azure
+      - "$HOME/.azure/**"
+      # Kubernetes
+      - "$HOME/.kube/config"
+      - "$HOME/.kube/cache/**"
+      # Docker
+      - "$HOME/.docker/config.json"
+      # Terraform (home-scoped)
+      - "$HOME/.terraform.d/credentials.tfrc.json"
+      # Terraform (project-scoped)
       - "**/terraform.tfstate"
       - "**/terraform.tfstate.backup"
     actions: [read, write, delete, copy, move, network]
@@ -132,25 +91,13 @@ rules:
   # ===========================================================================
   - name: protect-gpg-keys
     block:
-      - "/Users/*/.gnupg/private-keys-v1.d/**"
-      - "/Users/*/.gnupg/secring.gpg"
-      - "/Users/*/.gnupg/trustdb.gpg"
-      - "/Users/*/.gnupg/random_seed"
-      - "/home/*/.gnupg/private-keys-v1.d/**"
-      - "/home/*/.gnupg/secring.gpg"
-      - "/home/*/.gnupg/trustdb.gpg"
-      - "/home/*/.gnupg/random_seed"
-      - "C:/Users/*/.gnupg/private-keys-v1.d/**"
-      - "C:/Users/*/.gnupg/secring.gpg"
-      - "C:/Users/*/.gnupg/trustdb.gpg"
-      - "C:/Users/*/.gnupg/random_seed"
+      - "$HOME/.gnupg/private-keys-v1.d/**"
+      - "$HOME/.gnupg/secring.gpg"
+      - "$HOME/.gnupg/trustdb.gpg"
+      - "$HOME/.gnupg/random_seed"
     except:
-      - "/Users/*/.gnupg/pubring.gpg"
-      - "/Users/*/.gnupg/*.conf"
-      - "/home/*/.gnupg/pubring.gpg"
-      - "/home/*/.gnupg/*.conf"
-      - "C:/Users/*/.gnupg/pubring.gpg"
-      - "C:/Users/*/.gnupg/*.conf"
+      - "$HOME/.gnupg/pubring.gpg"
+      - "$HOME/.gnupg/*.conf"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access GPG private keys"
     severity: critical
@@ -160,33 +107,29 @@ rules:
   # ===========================================================================
   - name: protect-browser-data
     block:
-      # Chrome (macOS)
-      - "/Users/*/Library/Application Support/Google/Chrome/**/Login Data"
-      - "/Users/*/Library/Application Support/Google/Chrome/**/Cookies"
-      - "/Users/*/Library/Application Support/Google/Chrome/**/History"
-      # Chrome (Linux)
-      - "/home/*/.config/google-chrome/**/Login Data"
-      - "/home/*/.config/google-chrome/**/Cookies"
-      - "/home/*/.config/google-chrome/**/History"
-      # Chrome (Windows)
-      - "C:/Users/*/AppData/Local/Google/Chrome/User Data/**/Login Data"
-      - "C:/Users/*/AppData/Local/Google/Chrome/User Data/**/Cookies"
-      - "C:/Users/*/AppData/Local/Google/Chrome/User Data/**/History"
-      # Firefox (macOS)
-      - "/Users/*/Library/Application Support/Firefox/Profiles/**/logins.json"
-      - "/Users/*/Library/Application Support/Firefox/Profiles/**/key*.db"
-      - "/Users/*/Library/Application Support/Firefox/Profiles/**/cookies.sqlite"
-      # Firefox (Linux)
-      - "/home/*/.mozilla/firefox/**/logins.json"
-      - "/home/*/.mozilla/firefox/**/key*.db"
-      - "/home/*/.mozilla/firefox/**/cookies.sqlite"
-      # Firefox (Windows)
-      - "C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/**/logins.json"
-      - "C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/**/key*.db"
-      - "C:/Users/*/AppData/Roaming/Mozilla/Firefox/Profiles/**/cookies.sqlite"
+      # Chrome
+      - "$HOME/Library/Application Support/Google/Chrome/**/Login Data"
+      - "$HOME/Library/Application Support/Google/Chrome/**/Cookies"
+      - "$HOME/Library/Application Support/Google/Chrome/**/History"
+      - "$HOME/.config/google-chrome/**/Login Data"
+      - "$HOME/.config/google-chrome/**/Cookies"
+      - "$HOME/.config/google-chrome/**/History"
+      - "$HOME/AppData/Local/Google/Chrome/User Data/**/Login Data"
+      - "$HOME/AppData/Local/Google/Chrome/User Data/**/Cookies"
+      - "$HOME/AppData/Local/Google/Chrome/User Data/**/History"
+      # Firefox
+      - "$HOME/Library/Application Support/Firefox/Profiles/**/logins.json"
+      - "$HOME/Library/Application Support/Firefox/Profiles/**/key*.db"
+      - "$HOME/Library/Application Support/Firefox/Profiles/**/cookies.sqlite"
+      - "$HOME/.mozilla/firefox/**/logins.json"
+      - "$HOME/.mozilla/firefox/**/key*.db"
+      - "$HOME/.mozilla/firefox/**/cookies.sqlite"
+      - "$HOME/AppData/Roaming/Mozilla/Firefox/Profiles/**/logins.json"
+      - "$HOME/AppData/Roaming/Mozilla/Firefox/Profiles/**/key*.db"
+      - "$HOME/AppData/Roaming/Mozilla/Firefox/Profiles/**/cookies.sqlite"
       # Safari (macOS only)
-      - "/Users/*/Library/Safari/History.db"
-      - "/Users/*/Library/Cookies/Cookies.binarycookies"
+      - "$HOME/Library/Safari/History.db"
+      - "$HOME/Library/Cookies/Cookies.binarycookies"
     actions: [read, copy]
     message: "Cannot access browser sensitive data"
     severity: high
@@ -233,29 +176,13 @@ rules:
   # ===========================================================================
   - name: protect-shell-rc
     block:
-      # macOS
-      - "/Users/*/.bashrc"
-      - "/Users/*/.bash_profile"
-      - "/Users/*/.bash_login"
-      - "/Users/*/.zshrc"
-      - "/Users/*/.zprofile"
-      - "/Users/*/.zshenv"
-      - "/Users/*/.profile"
-      # Linux
-      - "/home/*/.bashrc"
-      - "/home/*/.bash_profile"
-      - "/home/*/.bash_login"
-      - "/home/*/.zshrc"
-      - "/home/*/.zprofile"
-      - "/home/*/.zshenv"
-      - "/home/*/.profile"
-      - "/root/.bashrc"
-      - "/root/.zshrc"
-      - "/root/.profile"
-      # Windows (Git Bash)
-      - "C:/Users/*/.bashrc"
-      - "C:/Users/*/.bash_profile"
-      - "C:/Users/*/.profile"
+      - "$HOME/.bashrc"
+      - "$HOME/.bash_profile"
+      - "$HOME/.bash_login"
+      - "$HOME/.zshrc"
+      - "$HOME/.zprofile"
+      - "$HOME/.zshenv"
+      - "$HOME/.profile"
     actions: [write, delete]
     message: "Cannot modify shell startup files - persistence vector"
     severity: critical
@@ -265,14 +192,8 @@ rules:
   # ===========================================================================
   - name: protect-ssh-authorized-keys
     block:
-      - "/Users/*/.ssh/authorized_keys"
-      - "/Users/*/.ssh/authorized_keys2"
-      - "/home/*/.ssh/authorized_keys"
-      - "/home/*/.ssh/authorized_keys2"
-      - "/root/.ssh/authorized_keys"
-      - "/root/.ssh/authorized_keys2"
-      - "C:/Users/*/.ssh/authorized_keys"
-      - "C:/Users/*/.ssh/authorized_keys2"
+      - "$HOME/.ssh/authorized_keys"
+      - "$HOME/.ssh/authorized_keys2"
     actions: [write, delete]
     message: "Cannot modify SSH authorized keys - persistence vector"
     severity: critical
@@ -286,76 +207,76 @@ rules:
       # No legitimate AI coding agent reads these — MCP integrations use API
       # tokens via env vars, not local session files.
       #
-      # macOS: /Users/<user>/Library/Application Support/<App>/
-      # Linux: /home/<user>/.config/<App>/  (or .local/share/ for some)
-      # Windows: C:/Users/<user>/AppData/Roaming/<App>/  (after ToSlash)
+      # $HOME expands to the current user's home directory at engine init.
+      # Cross-OS paths are listed under $HOME — wrong-OS patterns compile
+      # but never match (e.g., $HOME/Library/... on Linux is harmless).
       #
       # --- Chat / Communication (account takeover risk) ---
       # Discord (+ PTB / Canary variants)
-      - "/Users/*/Library/Application Support/discord/**"
-      - "/Users/*/Library/Application Support/discordptb/**"
-      - "/Users/*/Library/Application Support/discordcanary/**"
-      - "/home/*/.config/discord/**"
-      - "/home/*/.config/discordptb/**"
-      - "/home/*/.config/discordcanary/**"
-      - "C:/Users/*/AppData/Roaming/discord/**"
-      - "C:/Users/*/AppData/Roaming/discordptb/**"
-      - "C:/Users/*/AppData/Roaming/discordcanary/**"
+      - "$HOME/Library/Application Support/discord/**"
+      - "$HOME/Library/Application Support/discordptb/**"
+      - "$HOME/Library/Application Support/discordcanary/**"
+      - "$HOME/.config/discord/**"
+      - "$HOME/.config/discordptb/**"
+      - "$HOME/.config/discordcanary/**"
+      - "$HOME/AppData/Roaming/discord/**"
+      - "$HOME/AppData/Roaming/discordptb/**"
+      - "$HOME/AppData/Roaming/discordcanary/**"
       # Slack
-      - "/Users/*/Library/Application Support/Slack/**"
-      - "/home/*/.config/Slack/**"
-      - "C:/Users/*/AppData/Roaming/Slack/**"
+      - "$HOME/Library/Application Support/Slack/**"
+      - "$HOME/.config/Slack/**"
+      - "$HOME/AppData/Roaming/Slack/**"
       # Telegram Desktop
-      - "/Users/*/Library/Application Support/Telegram Desktop/**"
-      - "/home/*/.local/share/TelegramDesktop/**"
-      - "C:/Users/*/AppData/Roaming/Telegram Desktop/**"
+      - "$HOME/Library/Application Support/Telegram Desktop/**"
+      - "$HOME/.local/share/TelegramDesktop/**"
+      - "$HOME/AppData/Roaming/Telegram Desktop/**"
       # Signal
-      - "/Users/*/Library/Application Support/Signal/**"
-      - "/home/*/.config/Signal/**"
-      - "C:/Users/*/AppData/Roaming/Signal/**"
+      - "$HOME/Library/Application Support/Signal/**"
+      - "$HOME/.config/Signal/**"
+      - "$HOME/AppData/Roaming/Signal/**"
       # WhatsApp Desktop
-      - "/Users/*/Library/Application Support/WhatsApp/**"
-      - "/home/*/.config/WhatsApp/**"
-      - "C:/Users/*/AppData/Roaming/WhatsApp/**"
+      - "$HOME/Library/Application Support/WhatsApp/**"
+      - "$HOME/.config/WhatsApp/**"
+      - "$HOME/AppData/Roaming/WhatsApp/**"
       # Microsoft Teams
-      - "/Users/*/Library/Application Support/Microsoft Teams/**"
-      - "/home/*/.config/Microsoft/Microsoft Teams/**"
-      - "C:/Users/*/AppData/Roaming/Microsoft/Teams/**"
+      - "$HOME/Library/Application Support/Microsoft Teams/**"
+      - "$HOME/.config/Microsoft/Microsoft Teams/**"
+      - "$HOME/AppData/Roaming/Microsoft/Teams/**"
       # Element (Matrix)
-      - "/Users/*/Library/Application Support/Element/**"
-      - "/home/*/.config/Element/**"
-      - "C:/Users/*/AppData/Roaming/Element/**"
+      - "$HOME/Library/Application Support/Element/**"
+      - "$HOME/.config/Element/**"
+      - "$HOME/AppData/Roaming/Element/**"
       # Skype
-      - "/Users/*/Library/Application Support/Microsoft/Skype for Desktop/**"
-      - "/home/*/.config/skypeforlinux/**"
-      - "C:/Users/*/AppData/Roaming/Microsoft/Skype for Desktop/**"
+      - "$HOME/Library/Application Support/Microsoft/Skype for Desktop/**"
+      - "$HOME/.config/skypeforlinux/**"
+      - "$HOME/AppData/Roaming/Microsoft/Skype for Desktop/**"
       # --- Developer Tools (API keys / OAuth tokens) ---
       # Postman
-      - "/Users/*/Library/Application Support/Postman/**"
-      - "/home/*/.config/Postman/**"
-      - "C:/Users/*/AppData/Roaming/Postman/**"
+      - "$HOME/Library/Application Support/Postman/**"
+      - "$HOME/.config/Postman/**"
+      - "$HOME/AppData/Roaming/Postman/**"
       # GitHub Desktop
-      - "/Users/*/Library/Application Support/GitHub Desktop/**"
-      - "/home/*/.config/GitHub Desktop/**"
-      - "C:/Users/*/AppData/Roaming/GitHub Desktop/**"
+      - "$HOME/Library/Application Support/GitHub Desktop/**"
+      - "$HOME/.config/GitHub Desktop/**"
+      - "$HOME/AppData/Roaming/GitHub Desktop/**"
       # Figma
-      - "/Users/*/Library/Application Support/Figma/**"
-      - "/home/*/.config/Figma/**"
-      - "C:/Users/*/AppData/Roaming/Figma/**"
+      - "$HOME/Library/Application Support/Figma/**"
+      - "$HOME/.config/Figma/**"
+      - "$HOME/AppData/Roaming/Figma/**"
       # Insomnia
-      - "/Users/*/Library/Application Support/Insomnia/**"
-      - "/home/*/.config/Insomnia/**"
-      - "C:/Users/*/AppData/Roaming/Insomnia/**"
+      - "$HOME/Library/Application Support/Insomnia/**"
+      - "$HOME/.config/Insomnia/**"
+      - "$HOME/AppData/Roaming/Insomnia/**"
       # --- Password Managers (local vault = all passwords) ---
       # Bitwarden
-      - "/Users/*/Library/Application Support/Bitwarden/**"
-      - "/home/*/.config/Bitwarden/**"
-      - "C:/Users/*/AppData/Roaming/Bitwarden/**"
+      - "$HOME/Library/Application Support/Bitwarden/**"
+      - "$HOME/.config/Bitwarden/**"
+      - "$HOME/AppData/Roaming/Bitwarden/**"
       # --- Productivity ---
       # Notion
-      - "/Users/*/Library/Application Support/Notion/**"
-      - "/home/*/.config/Notion/**"
-      - "C:/Users/*/AppData/Roaming/Notion/**"
+      - "$HOME/Library/Application Support/Notion/**"
+      - "$HOME/.config/Notion/**"
+      - "$HOME/AppData/Roaming/Notion/**"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access desktop app data - may contain session tokens"
     severity: critical

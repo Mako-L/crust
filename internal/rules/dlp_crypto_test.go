@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -218,7 +219,7 @@ func TestCryptoWalletPaths(t *testing.T) {
 	t.Run("direct access", func(t *testing.T) {
 		// Use the first wallet dir as test target.
 		testDir := cryptoWalletDirs[0]
-		testPath := testDir + "/wallet.dat"
+		testPath := filepath.Join(testDir, "wallet.dat")
 
 		blocked, path := hasCryptoWalletPath([]string{testPath})
 		if !blocked {

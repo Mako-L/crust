@@ -4,10 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
 )
 
@@ -15,7 +15,7 @@ import (
 // - BIP39 mnemonics: sliding window over embedded 2048-word English wordlist
 // - Extended private keys (xprv/yprv/zprv/tprv): regex + base58check checksum
 // - WIF private keys (5/K/L prefix): regex + base58check checksum + version byte
-// - Wallet path protection: hardcoded directory check via btcutil.AppDataDir()
+// - Wallet path protection: hardcoded directory check using OS-specific data dirs
 
 // cryptoDLPMatch holds a crypto DLP detection result.
 type cryptoDLPMatch struct {
@@ -147,9 +147,39 @@ func scanWIFKey(content string) *cryptoDLPMatch {
 
 // --- Crypto Wallet Path Protection ---
 
-// cryptoWalletDirs are computed once at init via btcutil.AppDataDir().
-// Checked after symlink resolution (step 14b) so symlink bypasses are caught.
+// cryptoWalletDirs are computed once at init using OS-specific data directories.
+// Checked after symlink resolution (step 15) so symlink bypasses are caught.
 var cryptoWalletDirs []string
+
+// cryptoDataDir returns the OS-specific data directory for a cryptocurrency.
+// Follows the same convention as Bitcoin Core and most crypto wallets:
+//   - Linux/FreeBSD: ~/.chainname  (lowercase, dot prefix)
+//   - macOS:         ~/Library/Application Support/Chainname  (title case)
+//   - Windows:       %LOCALAPPDATA%\Chainname  (title case)
+func cryptoDataDir(home, chain string) string {
+	upper := string(unicode.ToUpper(rune(chain[0]))) + chain[1:]
+	lower := string(unicode.ToLower(rune(chain[0]))) + chain[1:]
+
+	switch runtime.GOOS {
+	case "windows":
+		appData := os.Getenv("LOCALAPPDATA")
+		if appData == "" {
+			appData = os.Getenv("APPDATA")
+		}
+		if appData != "" {
+			return filepath.Join(appData, upper)
+		}
+	case "darwin":
+		if home != "" {
+			return filepath.Join(home, "Library", "Application Support", upper)
+		}
+	default:
+		if home != "" {
+			return filepath.Join(home, "."+lower)
+		}
+	}
+	return ""
+}
 
 func init() {
 	home, err := os.UserHomeDir()
@@ -157,14 +187,14 @@ func init() {
 		home = ""
 	}
 
-	// All major chains that follow the AppDataDir convention.
+	// All major chains that follow the standard data directory convention.
 	for _, chain := range []string{
 		"bitcoin", "litecoin", "dogecoin", "dash", // Bitcoin forks
 		"ethereum", "electrum", "monero", "zcash", // Major chains
 		"cardano", "cosmos", "polkadot", // PoS chains
 		"avalanche", "tron", // Other popular
 	} {
-		if dir := btcutil.AppDataDir(chain, false); dir != "" {
+		if dir := cryptoDataDir(home, chain); dir != "" {
 			cryptoWalletDirs = append(cryptoWalletDirs, dir)
 		}
 	}
@@ -186,8 +216,9 @@ func init() {
 // hasCryptoWalletPath checks if any path is inside a crypto wallet directory.
 func hasCryptoWalletPath(paths []string) (bool, string) {
 	for _, p := range paths {
+		cleaned := filepath.Clean(p) // normalize separators (/ → \ on Windows)
 		for _, dir := range cryptoWalletDirs {
-			if strings.HasPrefix(p, dir+string(filepath.Separator)) || p == dir {
+			if strings.HasPrefix(cleaned, dir+string(filepath.Separator)) || cleaned == dir {
 				return true, p
 			}
 		}

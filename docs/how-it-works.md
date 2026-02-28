@@ -196,7 +196,7 @@ BIP39 mnemonics are the universal seed phrase standard used by Bitcoin, Ethereum
 
 ### Crypto Wallet Path Protection
 
-Step 15 blocks access to cryptocurrency wallet directories. Paths are computed at init via `btcutil.AppDataDir()` for OS-correct locations (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux). This check runs **after symlink resolution** (step 13) so symlink bypasses are caught.
+Step 15 blocks access to cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 13) so symlink bypasses are caught.
 
 Protected chains: Bitcoin, Litecoin, Dogecoin, Dash, Ethereum, Electrum, Monero, Zcash, Cardano, Cosmos, Polkadot, Avalanche, Tron, Solana, Sui, Aptos.
 

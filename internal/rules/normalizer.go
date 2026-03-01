@@ -2,6 +2,7 @@ package rules
 
 import (
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 
@@ -279,13 +280,15 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	// Handle ./ prefix
+	// Use pathpkg.Join (not filepathpkg.Join) — always produces forward slashes.
+	// filepathpkg.Join produces backslashes on Windows, breaking the
+	// normalization pipeline which standardizes on forward slashes.
 	if strings.HasPrefix(path, "./") {
-		return filepath.Join(n.workDir, path[2:])
+		return pathpkg.Join(n.workDir, path[2:])
 	}
 
 	// Handle ../ prefix or just a relative path
-	return filepath.Join(n.workDir, path)
+	return pathpkg.Join(n.workDir, path)
 }
 
 // GetHomeDir returns the home directory used by this normalizer.

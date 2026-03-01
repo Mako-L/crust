@@ -213,11 +213,12 @@ func init() {
 		)
 	}
 
-	// Lowercase wallet dirs on case-insensitive filesystems (NTFS, default APFS).
-	// Paths arriving here are lowercased by the normalizer.
+	// Normalize wallet dirs: forward slashes + lowercase on case-insensitive
+	// filesystems (NTFS, default APFS). hasCryptoWalletPath uses
+	// pathutil.CleanPath which outputs forward slashes, so dirs must match.
 	fs := pathutil.DefaultFS()
 	for i, dir := range cryptoWalletDirs {
-		cryptoWalletDirs[i] = fs.Lower(dir)
+		cryptoWalletDirs[i] = fs.Lower(pathutil.ToSlash(dir))
 	}
 }
 

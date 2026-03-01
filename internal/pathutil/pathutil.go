@@ -170,12 +170,19 @@ func CleanPath(p string) string {
 // HasPathPrefix checks if path starts with dir as a proper path prefix.
 // Returns true if path == dir OR path starts with dir followed by a separator.
 // Prevents false prefix matches like dir="/rules" matching path="/rules-backup".
-// Uses filepath.Separator for native-separator paths (from filepath.Abs/Clean).
+// Accepts both "/" and "\" as separators so it works with both native paths
+// (from filepath.Abs/Join) and normalized paths (from pathutil.CleanPath/ToSlash).
 func HasPathPrefix(p, dir string) bool {
 	if p == dir {
 		return true
 	}
-	return strings.HasPrefix(p, dir+string(filepath.Separator))
+	if strings.HasPrefix(p, dir+"/") {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		return strings.HasPrefix(p, dir+`\`)
+	}
+	return false
 }
 
 // StripFileURIDriveLetter strips a leading "/" before a Windows drive letter

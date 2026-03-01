@@ -156,3 +156,54 @@ func TestLockedRulesSurviveDisableBuiltin(t *testing.T) {
 
 	t.Logf("Locked rules surviving --disable-builtin: %d/%d", len(locked), len(rules))
 }
+
+// TestDynamicProtectionRulesSurviveDisableBuiltin verifies that the 3 dynamic
+// self-protection rules (rules-dir delete, rule-file write, socket access)
+// remain active when --disable-builtin is set.
+func TestDynamicProtectionRulesSurviveDisableBuiltin(t *testing.T) {
+	rulesDir := t.TempDir()
+	engine, err := NewEngine(EngineConfig{
+		DisableBuiltin: true,
+		UserRulesDir:   rulesDir,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		toolCall ToolCall
+	}{
+		{
+			name: "block-crust-rules-dir-delete",
+			toolCall: ToolCall{
+				Name:      "Bash",
+				Arguments: []byte(`{"command":"rm -rf ` + rulesDir + `/foo"}`),
+			},
+		},
+		{
+			name: "block-crust-rule-file-write",
+			toolCall: ToolCall{
+				Name:      "Write",
+				Arguments: []byte(`{"file_path":"` + rulesDir + `/evil.yaml","content":"x"}`),
+			},
+		},
+		{
+			name: "block-crust-socket-access",
+			toolCall: ToolCall{
+				Name:      "Read",
+				Arguments: []byte(`{"file_path":"/home/user/.crust/crust-api-12345.sock"}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.Evaluate(tt.toolCall)
+			if !result.Matched || result.Action != ActionBlock {
+				t.Errorf("Dynamic rule %s should block with DisableBuiltin=true, got matched=%v action=%v",
+					tt.name, result.Matched, result.Action)
+			}
+		})
+	}
+}

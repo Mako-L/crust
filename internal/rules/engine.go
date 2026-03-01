@@ -310,11 +310,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-rules-dir-delete",
 		Description: "Block deletion of Crust rules directory",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{cfg.UserRulesDir + "/**"},
 		},
 		Actions:  []Operation{OpDelete},
-		Message:  "BLOCKED: Cannot delete Crust rules directory",
+		Message:  "Blocked: Crust rules directory is protected from deletion.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})
@@ -323,11 +324,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-rule-file-write",
 		Description: "Block direct modification of rule files",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{cfg.UserRulesDir + "/*.yaml"},
 		},
 		Actions:  []Operation{OpWrite},
-		Message:  "BLOCKED: Cannot modify Crust rule files directly",
+		Message:  "Blocked: Crust rule files cannot be modified directly. Use the API.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})
@@ -336,11 +338,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-socket-access",
 		Description: "Block access to Crust management API sockets",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{"**/.crust/crust-api-*.sock", "**/.crust/*.sock"},
 		},
 		Actions:  []Operation{OpRead, OpWrite, OpDelete},
-		Message:  "BLOCKED: Cannot access Crust management socket",
+		Message:  "Blocked: Crust management socket is protected.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})

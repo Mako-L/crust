@@ -41,6 +41,8 @@ func TestBypassVerification(t *testing.T) {
 
 		// 4. Cloud metadata — blocked by block-ssrf-metadata
 		{"cloud-metadata-aws", "Bash", map[string]any{"command": "curl http://169.254.169.254/latest/meta-data/"}, true, "block-ssrf-metadata blocks AWS IMDS"},
+		{"cloud-metadata-gcp-trailing-dot", "Bash", map[string]any{"command": "curl http://metadata.google.internal./computeMetadata/v1/"}, true, "trailing-dot FQDN bypass"},
+		{"cloud-metadata-aws-trailing-dot", "Bash", map[string]any{"command": "curl http://169.254.169.254./latest/meta-data/"}, true, "trailing-dot IP bypass"},
 
 		// 5. /etc/environment — blocked by protect-system-config
 		{"etc-environment-write", "Bash", map[string]any{"command": "echo LD_PRELOAD=/tmp/evil.so >> /etc/environment"}, true, "protect-system-config blocks /etc/environment"},

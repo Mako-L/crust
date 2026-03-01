@@ -99,6 +99,9 @@ func (r *Rule) IsLocked() bool {
 	return r.Locked != nil && *r.Locked
 }
 
+// lockedTrue is a convenience pointer for setting Locked=true in Go-constructed rules.
+var lockedTrue = func() *bool { t := true; return &t }()
+
 // GetPriority returns the rule priority (default 50)
 func (r *Rule) GetPriority() int {
 	if r.Priority == 0 {

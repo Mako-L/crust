@@ -2749,6 +2749,7 @@ func extractHostFromURL(rawURL string) string {
 	}
 
 	host := strings.ToLower(u.Hostname()) // strips port, handles [IPv6]
+	host = strings.TrimRight(host, ".")   // strip trailing dot (FQDN form)
 	return normalizeIPHost(host)
 }
 

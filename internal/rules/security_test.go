@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -170,6 +171,12 @@ func TestDynamicProtectionRulesSurviveDisableBuiltin(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
+	// Use json.Marshal to construct arguments — raw string concatenation
+	// produces invalid JSON on Windows where TempDir contains backslashes
+	// (e.g. C:\Users\... → \U is an invalid JSON escape).
+	deleteArgs, _ := json.Marshal(map[string]string{"command": "rm -rf " + rulesDir + "/foo"})
+	writeArgs, _ := json.Marshal(map[string]string{"file_path": rulesDir + "/evil.yaml", "content": "x"})
+
 	tests := []struct {
 		name     string
 		toolCall ToolCall
@@ -178,14 +185,14 @@ func TestDynamicProtectionRulesSurviveDisableBuiltin(t *testing.T) {
 			name: "block-crust-rules-dir-delete",
 			toolCall: ToolCall{
 				Name:      "Bash",
-				Arguments: []byte(`{"command":"rm -rf ` + rulesDir + `/foo"}`),
+				Arguments: deleteArgs,
 			},
 		},
 		{
 			name: "block-crust-rule-file-write",
 			toolCall: ToolCall{
 				Name:      "Write",
-				Arguments: []byte(`{"file_path":"` + rulesDir + `/evil.yaml","content":"x"}`),
+				Arguments: writeArgs,
 			},
 		},
 		{

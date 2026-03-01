@@ -63,7 +63,7 @@ func FuzzNormalizerBypass(f *testing.F) {
 		}
 
 		// INVARIANT 4: Result must not contain "/../" segments after cleaning
-		// (filepath.Clean should handle this, but verify).
+		// (pathutil.CleanPath should handle this, but verify).
 		if strings.Contains(result, "/../") {
 			t.Errorf("Normalize result still contains /../: input=%q result=%q", path, result)
 		}
@@ -309,6 +309,8 @@ func FuzzExtractBashCommand(f *testing.F) {
 // COVERS: protect-shell-rc
 // COVERS: protect-ssh-authorized-keys
 // COVERS: protect-desktop-app-tokens
+// COVERS: protect-os-keychains
+// COVERS: protect-github-cli
 // COVERS: detect-private-key-write
 // COVERS: block-eval-exec
 // COVERS: protect-system-auth
@@ -349,6 +351,11 @@ func FuzzBuiltinRuleBypass(f *testing.F) {
 	// protect-desktop-app-tokens
 	f.Add("Read", `{"file_path":"/home/user/.config/discord/Local Storage/leveldb/000003.ldb"}`)
 	f.Add("Bash", `{"command":"cat /home/user/.config/Slack/Cookies"}`)
+	// protect-os-keychains
+	f.Add("Read", `{"file_path":"/home/user/Library/Keychains/login.keychain-db"}`)
+	f.Add("Read", `{"file_path":"/home/user/.local/share/keyrings/Default_keyring.keyring"}`)
+	// protect-github-cli
+	f.Add("Read", `{"file_path":"/home/user/.config/gh/hosts.yml"}`)
 	// detect-private-key-write / builtin:dlp-private-key
 	pkHeader := "-----BEGIN " + "RSA PRIVATE KEY-----"
 	f.Add("Write", `{"file_path":"/tmp/key","content":"`+pkHeader+`"}`)

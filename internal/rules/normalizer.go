@@ -2,11 +2,11 @@ package rules
 
 import (
 	"os"
-	"path"
+	pathpkg "path"
 	"path/filepath"
-	"runtime"
 	"strings"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -39,8 +39,8 @@ func NewNormalizer() *Normalizer {
 	}
 
 	return &Normalizer{
-		homeDir: filepath.ToSlash(homeDir),
-		workDir: filepath.ToSlash(workDir),
+		homeDir: pathutil.ToSlash(homeDir),
+		workDir: pathutil.ToSlash(workDir),
 		env:     env,
 	}
 }
@@ -52,8 +52,8 @@ func NewNormalizerWithEnv(homeDir, workDir string, env map[string]string) *Norma
 		env = make(map[string]string)
 	}
 	return &Normalizer{
-		homeDir: filepath.ToSlash(homeDir),
-		workDir: filepath.ToSlash(workDir),
+		homeDir: pathutil.ToSlash(homeDir),
+		workDir: pathutil.ToSlash(workDir),
 		env:     env,
 	}
 }
@@ -66,7 +66,7 @@ func NewNormalizerWithEnv(homeDir, workDir string, env map[string]string) *Norma
 //  4. Convert relative paths to absolute
 //  5. Resolve parent directory references (../)
 //  6. Remove duplicate slashes
-//  7. Clean the path using filepath.Clean
+//  7. Clean the path using pathutil.CleanPath
 func (n *Normalizer) Normalize(path string) string {
 	if path == "" {
 		return ""
@@ -94,7 +94,12 @@ func (n *Normalizer) Normalize(path string) string {
 
 	// Normalize path separators: both \ and / are valid on Windows.
 	// Convert to forward slashes early so all subsequent checks (~/,  ./, etc.) work.
-	path = filepath.ToSlash(path)
+	path = pathutil.ToSlash(path)
+
+	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
+	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
+	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
+	path = stripADS(path)
 
 	// SECURITY: Sanitize invalid UTF-8 before NFKC — invalid bytes (e.g., 0xF5)
 	// can corrupt NFKC processing of subsequent valid runes, breaking idempotency.
@@ -149,21 +154,26 @@ func (n *Normalizer) Normalize(path string) string {
 	// Step 5: Resolve parent directory references
 	// Step 6: Remove duplicate slashes
 	// Step 7: Clean the path
-	path = n.cleanPath(path)
+	path = pathutil.CleanPath(path)
 
 	// Final trim: path cleaning can expose trailing whitespace from segments
-	// like ". " (dot-space) that becomes meaningful after filepath.Clean.
+	// like ". " (dot-space) that becomes meaningful after pathutil.CleanPath.
 	// Loop because Clean may reveal new trailing whitespace from inner
 	// components (e.g., "0 / /" → Clean → "0 / " → Trim+Clean → "0 " → Trim+Clean → "0").
 	// Unbounded loop is safe: each iteration strictly shortens the string
-	// (TrimSpace removes ≥1 char, cleanPath never adds chars).
+	// (TrimSpace removes ≥1 char, pathutil.CleanPath never adds chars).
 	for {
 		trimmed := strings.TrimSpace(path)
 		if trimmed == path {
 			break
 		}
-		path = n.cleanPath(trimmed)
+		path = pathutil.CleanPath(trimmed)
 	}
+
+	// SECURITY: Lowercase paths on case-insensitive filesystems (NTFS, default
+	// APFS/HFS+) so pattern matching cannot be bypassed by changing case.
+	// Detected via direct kernel syscalls — cannot be fooled.
+	path = pathutil.DefaultFS().Lower(path)
 
 	return path
 }
@@ -183,7 +193,7 @@ func (n *Normalizer) NormalizeAll(paths []string) []string {
 
 // NormalizePattern normalizes a glob pattern for profile generation.
 // Unlike Normalize(), it does NOT convert relative paths to absolute or run
-// filepath.Clean, which would destroy glob syntax like ** and *.
+// pathutil.CleanPath, which would destroy glob syntax like ** and *.
 // It applies: null byte removal, NFKC, confusable stripping, tilde expansion,
 // and environment variable expansion.
 func (n *Normalizer) NormalizePattern(pattern string) string {
@@ -195,12 +205,15 @@ func (n *Normalizer) NormalizePattern(pattern string) string {
 		return ""
 	}
 	// Normalize path separators: both \ and / are valid on Windows.
-	pattern = filepath.ToSlash(pattern)
+	pattern = pathutil.ToSlash(pattern)
 	pattern = norm.NFKC.String(pattern)
 	pattern = stripInvisible(pattern)
 	pattern = stripConfusables(pattern)
 	pattern = n.expandTilde(pattern)
 	pattern = n.expandEnvVars(pattern)
+	// SECURITY: Lowercase patterns on case-insensitive filesystems to match
+	// lowercased paths (see Normalize). Detected via direct kernel syscalls.
+	pattern = pathutil.DefaultFS().Lower(pattern)
 	return pattern
 }
 
@@ -254,20 +267,12 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	if runtime.GOOS == "windows" {
-		// On Windows, only accept drive letter paths that are absolute
-		// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
-		// a root slash and can't be resolved without knowing the current
-		// directory on that drive — treat them as relative.
-		if len(path) >= 3 && path[1] == ':' && path[2] == '/' && isDriverLetter(path[0]) {
-			return path
-		}
-	} else {
-		// On Unix, filepath.IsAbs is reliable (just checks for / prefix,
-		// which we already handled above).
-		if filepath.IsAbs(path) {
-			return path
-		}
+	// On Windows, only accept drive letter paths that are absolute
+	// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
+	// a root slash and can't be resolved without knowing the current
+	// directory on that drive — treat them as relative.
+	if pathutil.IsDrivePath(path) && len(path) >= 3 && path[2] == '/' {
+		return path
 	}
 
 	// No working directory, can't make absolute
@@ -275,73 +280,15 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	// Handle ./ prefix
+	// Use pathpkg.Join (not filepathpkg.Join) — always produces forward slashes.
+	// filepathpkg.Join produces backslashes on Windows, breaking the
+	// normalization pipeline which standardizes on forward slashes.
 	if strings.HasPrefix(path, "./") {
-		return filepath.Join(n.workDir, path[2:])
+		return pathpkg.Join(n.workDir, path[2:])
 	}
 
 	// Handle ../ prefix or just a relative path
-	return filepath.Join(n.workDir, path)
-}
-
-// cleanPath cleans the path by resolving .., removing duplicate slashes, etc.
-// Always returns forward slashes for consistent cross-platform matching.
-//
-// On Windows: uses filepath.Clean which understands volume names (C:, D:)
-// and resolves ".." correctly relative to drive roots.
-// On Unix: uses path.Clean (forward-slash only) to avoid filepath.Clean's
-// UNC path confusion (filepath.Clean treats // as UNC prefix on Windows builds).
-func (n *Normalizer) cleanPath(p string) string {
-	if p == "" {
-		return ""
-	}
-
-	// Ensure forward slashes before cleaning (filepath.Join may produce \ on Windows).
-	p = filepath.ToSlash(p)
-
-	if runtime.GOOS == "windows" {
-		// Collapse leading duplicate slashes — agents send Unix-style paths
-		// where "//" is a redundant slash, not a Windows UNC prefix.
-		for len(p) > 1 && p[0] == '/' && p[1] == '/' {
-			p = p[1:]
-		}
-		// On Windows, filepath.Clean mangles paths containing reserved chars
-		// (?, :, CON, etc.) by appending "." — designed for real filesystem
-		// paths, not agent-provided patterns. Extract the drive letter prefix
-		// (e.g., "C:") and use path.Clean for the rest to get correct ".."
-		// resolution without reserved-name mangling.
-		// Only use filepath.VolumeName for actual drive letters (2-char "X:").
-		// It also recognizes UNC/NT paths (//??, \\server\share) which we
-		// don't want to handle specially for agent-provided paths.
-		vol := filepath.VolumeName(p)
-		if len(vol) != 2 || vol[1] != ':' || !isDriverLetter(vol[0]) {
-			vol = "" // Not a drive letter — treat as regular path
-		}
-		rest := p[len(vol):]
-		cleaned := path.Clean(rest)
-		// Ensure absolute paths stay absolute
-		if strings.HasPrefix(rest, "/") && !strings.HasPrefix(cleaned, "/") {
-			cleaned = "/" + cleaned
-		}
-		return vol + cleaned
-	}
-
-	// Unix: use path.Clean which always uses forward slashes and does not
-	// interpret // as a Windows UNC path prefix.
-	cleaned := path.Clean(p)
-
-	// Ensure absolute paths stay absolute
-	// (path.Clean might produce "." for some edge cases)
-	if strings.HasPrefix(p, "/") && !strings.HasPrefix(cleaned, "/") {
-		cleaned = "/" + cleaned
-	}
-
-	return cleaned
-}
-
-// isDriverLetter returns true if c is an ASCII letter (A-Z, a-z).
-func isDriverLetter(c byte) bool {
-	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	return pathpkg.Join(n.workDir, path)
 }
 
 // GetHomeDir returns the home directory used by this normalizer.
@@ -357,6 +304,11 @@ func (n *Normalizer) GetWorkDir() string {
 // ResolveSymlink resolves symlinks in a path if the file exists.
 // If the path doesn't exist or symlink resolution fails, returns the original path.
 // This prevents bypasses like: ln -s /etc/passwd /tmp/x && cat /tmp/x
+//
+// SECURITY: The resolved path is lowercased on case-insensitive filesystems.
+// filepath.EvalSymlinks returns canonical casing from the filesystem (e.g.,
+// "/Users/cyy/.ssh/id_rsa" on macOS APFS), which would mismatch lowered
+// patterns without this step.
 func (n *Normalizer) ResolveSymlink(path string) string {
 	if path == "" {
 		return ""
@@ -370,7 +322,11 @@ func (n *Normalizer) ResolveSymlink(path string) string {
 		return path
 	}
 
-	return filepath.ToSlash(resolved)
+	resolved = pathutil.ToSlash(resolved)
+
+	// Lowercase on case-insensitive filesystems to match normalized paths
+	// and lowered patterns. Without this, resolved paths bypass matching.
+	return pathutil.DefaultFS().Lower(resolved)
 }
 
 // resolveSymlinks resolves symlinks for multiple already-normalized paths.
@@ -525,4 +481,36 @@ func stripConfusables(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// stripADS removes NTFS Alternate Data Stream suffixes from path segments.
+// On Windows, "file::$DATA" and "file:streamname" access the same base file
+// or hidden streams. Stripping the ADS suffix ensures glob patterns match
+// the canonical filename. On non-Windows platforms this is a no-op since
+// paths never contain ADS syntax legitimately, but we strip unconditionally
+// for defense-in-depth (agents can send Windows-style paths from any platform).
+func stripADS(p string) string {
+	// Fast path: no colon means no ADS possible.
+	// Skip drive letter prefix (e.g., "C:/...") — the colon at index 1
+	// is a drive separator, not an ADS marker.
+	start := 0
+	if len(p) >= 2 && p[1] == ':' && pathutil.IsDriverLetter(p[0]) {
+		start = 2
+	}
+	if !strings.Contains(p[start:], ":") {
+		return p
+	}
+
+	// Process each path segment, stripping everything after the first colon.
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		// Skip empty segments and drive letter (first segment like "C:")
+		if i == 0 && len(part) == 2 && part[1] == ':' && pathutil.IsDriverLetter(part[0]) {
+			continue
+		}
+		if before, _, ok := strings.Cut(part, ":"); ok {
+			parts[i] = before
+		}
+	}
+	return strings.Join(parts, "/")
 }

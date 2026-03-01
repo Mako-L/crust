@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"github.com/BakeLens/crust/internal/logger"
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/gobwas/glob"
 )
 
@@ -25,7 +27,7 @@ func expandRuleHomes(rules []Rule, homeDir string) []Rule {
 	if homeDir == "" {
 		return rules
 	}
-	home := filepath.ToSlash(homeDir)
+	home := pathutil.ToSlash(homeDir)
 	for i := range rules {
 		for j, p := range rules[i].Block.Paths {
 			rules[i].Block.Paths[j] = strings.ReplaceAll(p, "$HOME", home)
@@ -84,7 +86,11 @@ var selfProtectAPIRegex = regexp.MustCompile(
 var selfProtectSocketRegex = regexp.MustCompile(
 	`(?i)(` +
 		`--unix-socket|` + // curl --unix-socket
+		`--unixsock|` + // ncat --unixsock
+		`\bnc\s.*\s-U\s|` + // nc -U /path/to/socket (netcat)
+		`\bncat\s.*\s-U\s|` + // ncat -U /path/to/socket
 		`UNIX-CONNECT:|` + // socat UNIX-CONNECT:
+		`UNIX:|` + // socat UNIX: (short alias)
 		`AF_UNIX|` + // Python/C socket code
 		`crust-api[-.]\S*\.sock|` + // socket filenames (crust-api-9090.sock etc.)
 		`\\\\.\\pipe\\crust|` + // Windows named pipe \\.\pipe\crust*
@@ -436,24 +442,31 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	}
 
 	// Step 7: Self-protection — block management API access (hardcoded, not YAML).
-	if info.RawJSON != "" && selfProtectAPIRegex.MatchString(info.RawJSON) {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-crust-api",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  "Cannot access Crust management API",
+	// Check both raw and URL-decoded forms to catch %63%72%75%73%74 ("crust") bypass.
+	if info.RawJSON != "" {
+		selfProtectInput := info.RawJSON
+		if decoded, err := url.QueryUnescape(info.RawJSON); err == nil && decoded != info.RawJSON {
+			selfProtectInput = info.RawJSON + " " + decoded
 		}
-	}
+		if selfProtectAPIRegex.MatchString(selfProtectInput) {
+			return MatchResult{
+				Matched:  true,
+				RuleName: "builtin:protect-crust-api",
+				Severity: SeverityCritical,
+				Action:   ActionBlock,
+				Message:  "Cannot access Crust management API",
+			}
+		}
 
-	// Step 8: Block management API access via Unix socket / named pipe.
-	if info.RawJSON != "" && selfProtectSocketRegex.MatchString(info.RawJSON) {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-crust-socket",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  "Cannot access Crust management socket",
+		// Step 8: Block management API access via Unix socket / named pipe.
+		if selfProtectSocketRegex.MatchString(selfProtectInput) {
+			return MatchResult{
+				Matched:  true,
+				RuleName: "builtin:protect-crust-socket",
+				Severity: SeverityCritical,
+				Action:   ActionBlock,
+				Message:  "Cannot access Crust management socket",
+			}
 		}
 	}
 
@@ -1244,6 +1257,7 @@ func (e *Engine) incrementHitCount(name string) {
 // If a glob matches no files, the path is dropped — there's nothing to protect.
 // Non-glob paths pass through unchanged.
 func expandFileGlobs(paths []string) []string {
+	fs := pathutil.DefaultFS()
 	result := make([]string, 0, len(paths))
 	for _, p := range paths {
 		if !containsGlob(p) {
@@ -1254,7 +1268,13 @@ func expandFileGlobs(paths []string) []string {
 		if err != nil || len(matches) == 0 {
 			continue
 		}
-		result = append(result, matches...)
+		// SECURITY: filepath.Glob returns canonical casing from the filesystem.
+		// On case-insensitive APFS, a lowered glob like "/users/cyy/.e*" may
+		// return "/users/cyy/.Env" (canonical case). Re-lower to match
+		// the normalizer's lowering and prevent case-based pattern bypasses.
+		for _, m := range matches {
+			result = append(result, fs.Lower(pathutil.ToSlash(m)))
+		}
 	}
 	return result
 }

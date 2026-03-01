@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
 )
 
@@ -211,14 +212,26 @@ func init() {
 			filepath.Join(home, ".aptos"),
 		)
 	}
+
+	// Normalize wallet dirs: forward slashes + lowercase on case-insensitive
+	// filesystems (NTFS, default APFS). hasCryptoWalletPath uses
+	// pathutil.CleanPath which outputs forward slashes, so dirs must match.
+	fs := pathutil.DefaultFS()
+	for i, dir := range cryptoWalletDirs {
+		cryptoWalletDirs[i] = fs.Lower(pathutil.ToSlash(dir))
+	}
 }
 
 // hasCryptoWalletPath checks if any path is inside a crypto wallet directory.
+// Defense-in-depth: lowercases cleaned paths on case-insensitive filesystems
+// to match the lowered cryptoWalletDirs (set in init). This catches any paths
+// that bypass the normalizer's lowering (e.g., symlink-resolved paths).
 func hasCryptoWalletPath(paths []string) (bool, string) {
+	fs := pathutil.DefaultFS()
 	for _, p := range paths {
-		cleaned := filepath.Clean(p) // normalize separators (/ → \ on Windows)
+		cleaned := fs.Lower(pathutil.CleanPath(p))
 		for _, dir := range cryptoWalletDirs {
-			if strings.HasPrefix(cleaned, dir+string(filepath.Separator)) || cleaned == dir {
+			if pathutil.HasPathPrefix(cleaned, dir) {
 				return true, p
 			}
 		}

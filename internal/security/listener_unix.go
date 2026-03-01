@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/BakeLens/crust/internal/fileutil"
 	"golang.org/x/sys/unix"
 )
 
@@ -28,7 +29,7 @@ func apiListener(socketPath string) (net.Listener, error) {
 	// Acquire exclusive flock on a lockfile — this is the authoritative
 	// ownership check. If the lock succeeds, no other instance owns this socket.
 	lockPath := socketPath + ".lock"
-	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
+	lf, err := fileutil.SecureOpenFile(lockPath, os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return nil, fmt.Errorf("open socket lockfile %s: %w", lockPath, err)
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/fileutil"
+	"github.com/BakeLens/crust/internal/pathutil"
 	"golang.org/x/crypto/sha3"
 	"gopkg.in/yaml.v3"
 )
@@ -98,11 +99,9 @@ func (l *Loader) LoadUser() ([]Rule, error) {
 
 	log.Trace("Loading user path-based rules from: %s", l.userDir)
 
-	// Ensure directory exists. Use plain MkdirAll here — the directory's
-	// DACL is secured by SecureMkdirAll when rules are written via the API
-	// or WriteUserRule. Re-applying PROTECTED_DACL on every load would
-	// break files written before the DACL change (Windows does not
-	// retroactively propagate new DACLs to existing children).
+	// Use plain MkdirAll here — SecureMkdirAll sets PROTECTED_DACL with
+	// NO_INHERITANCE on Windows, which breaks access to files already in the
+	// directory. SecureMkdirAll is used in WriteUserRule (the creation path).
 	if err := os.MkdirAll(l.userDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create rules directory: %w", err)
 	}
@@ -297,9 +296,10 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 		return "", fmt.Errorf("failed to resolve user dir: %w", err)
 	}
 
-	// Ensure the path is within the user directory
-	// Add trailing separator to prevent prefix matching issues (e.g., /rules vs /rules-backup)
-	if !strings.HasPrefix(absPath, absUserDir+string(os.PathSeparator)) && absPath != absUserDir {
+	// Ensure the path is within the user directory.
+	// HasPathPrefix handles trailing separator to prevent prefix issues
+	// (e.g., /rules vs /rules-backup).
+	if !pathutil.HasPathPrefix(absPath, absUserDir) {
 		return "", fmt.Errorf("path traversal detected: %s is outside %s", absPath, absUserDir)
 	}
 
@@ -311,7 +311,7 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to resolve symlink: %w", err)
 			}
-			if !strings.HasPrefix(absRealPath, absUserDir+string(os.PathSeparator)) && absRealPath != absUserDir {
+			if !pathutil.HasPathPrefix(absRealPath, absUserDir) {
 				return "", errors.New("symlink points outside rules directory")
 			}
 		}

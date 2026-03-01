@@ -1,9 +1,9 @@
 package rules
 
 import (
-	"path/filepath"
 	"strings"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/gobwas/glob"
 )
 
@@ -14,25 +14,28 @@ type Matcher struct {
 }
 
 // NewMatcher creates a matcher from glob patterns and exceptions.
-// Returns an error if any pattern fails to compile.
+// Patterns are lowercased on case-insensitive filesystems to match
+// the lowercasing applied to paths in Match(). Returns an error if
+// any pattern fails to compile.
 func NewMatcher(patterns, excepts []string) (*Matcher, error) {
+	fs := pathutil.DefaultFS()
 	m := &Matcher{
 		patterns: make([]glob.Glob, 0, len(patterns)),
 		excepts:  make([]glob.Glob, 0, len(excepts)),
 	}
 
-	// Compile patterns
+	// Compile patterns (lowercased on case-insensitive filesystems)
 	for _, p := range patterns {
-		g, err := glob.Compile(p, '/')
+		g, err := glob.Compile(fs.Lower(p), '/')
 		if err != nil {
 			return nil, err
 		}
 		m.patterns = append(m.patterns, g)
 	}
 
-	// Compile excepts
+	// Compile excepts (lowercased on case-insensitive filesystems)
 	for _, e := range excepts {
-		g, err := glob.Compile(e, '/')
+		g, err := glob.Compile(fs.Lower(e), '/')
 		if err != nil {
 			return nil, err
 		}
@@ -50,9 +53,13 @@ func (m *Matcher) Match(p string) bool {
 		return false
 	}
 
-	// Normalize separators: on Windows, convert \ to / so glob patterns using /
-	// match paths with either separator. On Unix this is a no-op.
-	p = filepath.ToSlash(p)
+	// Normalize separators: convert \ to / so glob patterns match consistently.
+	p = pathutil.ToSlash(p)
+
+	// SECURITY: Lowercase on case-insensitive filesystems. Defense-in-depth:
+	// paths should already be lowercased by the normalizer, but this catches
+	// any paths that bypass normalization. Uses kernel syscall detection.
+	p = pathutil.DefaultFS().Lower(p)
 
 	// Standard match: check if the path matches any compiled pattern.
 	for _, pat := range m.patterns {

@@ -24,6 +24,7 @@ import (
 	"github.com/BakeLens/crust/internal/completion"
 	"github.com/BakeLens/crust/internal/config"
 	"github.com/BakeLens/crust/internal/daemon"
+	"github.com/BakeLens/crust/internal/fileutil"
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/mcpgateway"
 	"github.com/BakeLens/crust/internal/proxy"
@@ -957,7 +958,7 @@ func runProxyCommand(pcfg proxyRunConfig, args []string) {
 		dir = rules.DefaultUserRulesDir()
 	}
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fileutil.SecureMkdirAll(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "crust %s: failed to create rules dir: %v\n", pcfg.name, err)
 		os.Exit(1)
 	}

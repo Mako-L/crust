@@ -2,6 +2,8 @@ package rules
 
 import (
 	"testing"
+
+	"github.com/BakeLens/crust/internal/pathutil"
 )
 
 func TestNormalizer_Normalize(t *testing.T) {
@@ -147,51 +149,11 @@ func TestNormalizer_Normalize(t *testing.T) {
 			expected: "/home/foo",
 		},
 
-		// 6. Path traversal normalization
-		{
-			name:     "absolute path with parent ref",
-			input:    "/tmp/../home/user",
-			expected: "/home/user",
-		},
-		{
-			name:     "absolute path with multiple parent refs",
-			input:    "/a/b/c/../../d",
-			expected: "/a/d",
-		},
-		{
-			name:     "absolute path with dot",
-			input:    "/foo/./bar",
-			expected: "/foo/bar",
-		},
-		{
-			name:     "parent ref at root level",
-			input:    "/../foo",
-			expected: "/foo",
-		},
+		// 6. Pure path cleaning (traversal, double slashes) is tested
+		// exhaustively in pathutil_test.go:TestCleanPath.
+		// Here we only test interaction with variable expansion.
 
-		// 7. Double slashes
-		{
-			name:     "double slash at start",
-			input:    "//foo",
-			expected: "/foo",
-		},
-		{
-			name:     "double slash in middle",
-			input:    "/foo//bar",
-			expected: "/foo/bar",
-		},
-		{
-			name:     "multiple double slashes",
-			input:    "/foo//bar//baz",
-			expected: "/foo/bar/baz",
-		},
-		{
-			name:     "triple slash",
-			input:    "///foo",
-			expected: "/foo",
-		},
-
-		// 8. Combinations
+		// 7. Combinations
 		{
 			name:     "$HOME with parent ref",
 			input:    "$HOME/../other",
@@ -349,6 +311,41 @@ func TestNormalizer_NormalizeAll(t *testing.T) {
 	}
 }
 
+func TestStripADS(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// No-op cases
+		{name: "no colon", input: "/etc/passwd", expected: "/etc/passwd"},
+		{name: "empty string", input: "", expected: ""},
+		{name: "root", input: "/", expected: "/"},
+
+		// NTFS ADS stripping
+		{name: "default data stream", input: "/Users/file.txt::$DATA", expected: "/Users/file.txt"},
+		{name: "named stream", input: "/Users/file.txt:Zone.Identifier", expected: "/Users/file.txt"},
+		{name: "nested path with ADS", input: "/home/user/.ssh/id_rsa::$DATA", expected: "/home/user/.ssh/id_rsa"},
+		{name: "multiple segments with ADS", input: "/dir:s1/file:s2", expected: "/dir/file"},
+
+		// Drive letter preservation
+		{name: "drive letter preserved", input: "C:/Users/file.txt::$DATA", expected: "C:/Users/file.txt"},
+		{name: "drive letter no ADS", input: "C:/Users/file.txt", expected: "C:/Users/file.txt"},
+		{name: "lowercase drive letter", input: "c:/foo:bar", expected: "c:/foo"},
+		{name: "drive letter only", input: "C:", expected: "C:"},
+		{name: "drive letter with just stream", input: "C:/file:stream/dir", expected: "C:/file/dir"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripADS(tt.input)
+			if result != tt.expected {
+				t.Errorf("stripADS(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 	env := map[string]string{
 		"A":         "/a",
@@ -414,9 +411,11 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 			expected: "/a/ab",
 		},
 		{
-			name:     "braced var allows adjacent text",
-			input:    "${A}B",
-			expected: "/aB",
+			name:  "braced var allows adjacent text",
+			input: "${A}B",
+			// On case-insensitive filesystems (macOS APFS), the normalizer
+			// lowercases the entire path, so "/aB" becomes "/ab".
+			expected: pathutil.DefaultFS().Lower("/aB"),
 		},
 	}
 

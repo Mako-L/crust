@@ -114,10 +114,10 @@ var dlpPatterns = []dlpPattern{
 		message: "Cannot write Databricks token — potential credential leak",
 	},
 
-	// Anthropic
+	// Anthropic (api03, api04, … — version-flexible prefix)
 	{
 		name:    "builtin:dlp-anthropic-api-key",
-		re:      regexp.MustCompile(`sk-ant-api03-[A-Za-z0-9_\-]{90,}`),
+		re:      regexp.MustCompile(`sk-ant-api\d{2}-[A-Za-z0-9_\-]{90,}`),
 		message: "Cannot write Anthropic API key — potential credential leak",
 	},
 

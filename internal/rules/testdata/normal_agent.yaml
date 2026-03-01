@@ -416,3 +416,41 @@ scenarios:
     args:
       command: "scp /tmp/file.txt remote-server:/tmp/"
     description: "scp to remote server"
+
+  # ============================================================================
+  # nc / ncat — non-socket usage (safe)
+  # ============================================================================
+
+  # nc as TCP client (not Unix socket)
+  - tool: Bash
+    args:
+      command: "nc -zv example.com 80"
+    description: "nc TCP port check (not Unix socket)"
+
+  - tool: Bash
+    args:
+      command: "ncat --ssl example.com 443"
+    description: "ncat SSL connection (not Unix socket)"
+
+  # ============================================================================
+  # Gradle/Maven — reading project files (not credentials)
+  # ============================================================================
+
+  - tool: Read
+    args:
+      file_path: "/home/user/project/build.gradle"
+    description: "Reading project build.gradle (not ~/.gradle)"
+
+  - tool: Read
+    args:
+      file_path: "/home/user/project/pom.xml"
+    description: "Reading project pom.xml (not ~/.m2)"
+
+  # ============================================================================
+  # Fish — reading project fish scripts (not config)
+  # ============================================================================
+
+  - tool: Read
+    args:
+      file_path: "/home/user/project/scripts/setup.fish"
+    description: "Reading project fish script (not ~/.config/fish)"

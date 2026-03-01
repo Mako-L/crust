@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -85,7 +86,11 @@ var selfProtectAPIRegex = regexp.MustCompile(
 var selfProtectSocketRegex = regexp.MustCompile(
 	`(?i)(` +
 		`--unix-socket|` + // curl --unix-socket
+		`--unixsock|` + // ncat --unixsock
+		`\bnc\s.*\s-U\s|` + // nc -U /path/to/socket (netcat)
+		`\bncat\s.*\s-U\s|` + // ncat -U /path/to/socket
 		`UNIX-CONNECT:|` + // socat UNIX-CONNECT:
+		`UNIX:|` + // socat UNIX: (short alias)
 		`AF_UNIX|` + // Python/C socket code
 		`crust-api[-.]\S*\.sock|` + // socket filenames (crust-api-9090.sock etc.)
 		`\\\\.\\pipe\\crust|` + // Windows named pipe \\.\pipe\crust*
@@ -437,24 +442,31 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	}
 
 	// Step 7: Self-protection — block management API access (hardcoded, not YAML).
-	if info.RawJSON != "" && selfProtectAPIRegex.MatchString(info.RawJSON) {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-crust-api",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  "Cannot access Crust management API",
+	// Check both raw and URL-decoded forms to catch %63%72%75%73%74 ("crust") bypass.
+	if info.RawJSON != "" {
+		selfProtectInput := info.RawJSON
+		if decoded, err := url.QueryUnescape(info.RawJSON); err == nil && decoded != info.RawJSON {
+			selfProtectInput = info.RawJSON + " " + decoded
 		}
-	}
+		if selfProtectAPIRegex.MatchString(selfProtectInput) {
+			return MatchResult{
+				Matched:  true,
+				RuleName: "builtin:protect-crust-api",
+				Severity: SeverityCritical,
+				Action:   ActionBlock,
+				Message:  "Cannot access Crust management API",
+			}
+		}
 
-	// Step 8: Block management API access via Unix socket / named pipe.
-	if info.RawJSON != "" && selfProtectSocketRegex.MatchString(info.RawJSON) {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-crust-socket",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  "Cannot access Crust management socket",
+		// Step 8: Block management API access via Unix socket / named pipe.
+		if selfProtectSocketRegex.MatchString(selfProtectInput) {
+			return MatchResult{
+				Matched:  true,
+				RuleName: "builtin:protect-crust-socket",
+				Severity: SeverityCritical,
+				Action:   ActionBlock,
+				Message:  "Cannot access Crust management socket",
+			}
 		}
 	}
 

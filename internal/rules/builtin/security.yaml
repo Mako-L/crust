@@ -59,6 +59,8 @@ rules:
       - "$HOME/.psql_history"
       - "$HOME/.sqlite_history"
       - "$HOME/.lesshst"
+      # Fish stores history in XDG data dir, not dotfile
+      - "$HOME/.local/share/fish/fish_history"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access shell history files"
     severity: high
@@ -129,6 +131,20 @@ rules:
       # Safari (macOS only)
       - "$HOME/Library/Safari/History.db"
       - "$HOME/Library/Cookies/Cookies.binarycookies"
+      # Microsoft Edge (Chromium-based — same file layout as Chrome)
+      - "$HOME/Library/Application Support/Microsoft Edge/**/Login Data"
+      - "$HOME/Library/Application Support/Microsoft Edge/**/Cookies"
+      - "$HOME/.config/microsoft-edge/**/Login Data"
+      - "$HOME/.config/microsoft-edge/**/Cookies"
+      - "$HOME/AppData/Local/Microsoft/Edge/User Data/**/Login Data"
+      - "$HOME/AppData/Local/Microsoft/Edge/User Data/**/Cookies"
+      # Brave (Chromium-based)
+      - "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/**/Login Data"
+      - "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/**/Cookies"
+      - "$HOME/.config/BraveSoftware/Brave-Browser/**/Login Data"
+      - "$HOME/.config/BraveSoftware/Brave-Browser/**/Cookies"
+      - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Login Data"
+      - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Cookies"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access browser sensitive data"
     severity: high
@@ -140,9 +156,12 @@ rules:
     block:
       - "**/.git-credentials"
       - "**/.config/git/credentials"
+      # .netrc stores plaintext credentials for HTTP services (git, curl, ftp)
+      - "$HOME/.netrc"
+      - "$HOME/_netrc"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access git credentials"
-    severity: high
+    message: "Cannot access git/network credentials"
+    severity: critical
 
   # ===========================================================================
   # 9. PACKAGE MANAGER TOKENS
@@ -166,6 +185,11 @@ rules:
       - "**/.nuget/NuGet.Config"
       # Gem
       - "**/.gem/credentials"
+      # Gradle
+      - "$HOME/.gradle/gradle.properties"
+      # Maven (settings.xml contains server credentials)
+      - "$HOME/.m2/settings.xml"
+      - "$HOME/.m2/settings-security.xml"
     actions: [read, write, delete, copy, move, network]
     message: "Cannot access package manager tokens"
     severity: high
@@ -184,6 +208,7 @@ rules:
       - "$HOME/.zlogin"
       - "$HOME/.profile"
       - "$HOME/.config/fish/config.fish"
+      - "$HOME/.config/fish/conf.d/**"
     actions: [write, delete]
     message: "Cannot modify shell startup files - persistence vector"
     severity: critical
@@ -274,6 +299,18 @@ rules:
       - "$HOME/Library/Application Support/Bitwarden/**"
       - "$HOME/.config/Bitwarden/**"
       - "$HOME/AppData/Roaming/Bitwarden/**"
+      # 1Password
+      - "$HOME/Library/Group Containers/*.com.1password/**"
+      - "$HOME/.config/1Password/**"
+      - "$HOME/AppData/Local/1Password/**"
+      # KeePass / KeePassXC
+      - "$HOME/Library/Application Support/KeePassXC/**"
+      - "$HOME/.config/keepassxc/**"
+      - "$HOME/AppData/Roaming/KeePassXC/**"
+      # LastPass
+      - "$HOME/Library/Application Support/LastPass/**"
+      - "$HOME/.lastpass/**"
+      - "$HOME/AppData/Roaming/LastPass/**"
       # --- Productivity ---
       # Notion
       - "$HOME/Library/Application Support/Notion/**"
@@ -284,7 +321,34 @@ rules:
     severity: critical
 
   # ===========================================================================
-  # 13. PRIVATE KEY CONTENT DETECTION
+  # 13. OS KEYCHAIN / SECRET STORE PROTECTION
+  # ===========================================================================
+  - name: protect-os-keychains
+    block:
+      # macOS Keychain files (login.keychain-db contains all saved passwords)
+      - "$HOME/Library/Keychains/**"
+      - "/Library/Keychains/**"
+      # GNOME Keyring (Linux desktop secret store)
+      - "$HOME/.local/share/keyrings/**"
+      # KDE Wallet
+      - "$HOME/.local/share/kwalletd/**"
+    actions: [read, write, delete, copy, move, network]
+    message: "Cannot access OS keychain/secret store - contains all saved passwords"
+    severity: critical
+
+  # ===========================================================================
+  # 14. GITHUB CLI TOKEN PROTECTION
+  # ===========================================================================
+  - name: protect-github-cli
+    block:
+      - "$HOME/.config/gh/hosts.yml"
+      - "$HOME/AppData/Roaming/GitHub CLI/hosts.yml"
+    actions: [read, write, delete, copy, move, network]
+    message: "Cannot access GitHub CLI credentials"
+    severity: critical
+
+  # ===========================================================================
+  # 15. PRIVATE KEY CONTENT DETECTION
   # ===========================================================================
   - name: detect-private-key-write
     match:
@@ -294,7 +358,7 @@ rules:
     severity: critical
 
   # ===========================================================================
-  # 14. SHELL EVASION PATTERNS (defense-in-depth for command regex rules)
+  # 16. SHELL EVASION PATTERNS (defense-in-depth for command regex rules)
   # ===========================================================================
   - name: block-eval-exec
     match:

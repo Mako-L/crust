@@ -17,10 +17,10 @@ import (
 // Tests rule: protect-package-tokens
 // Tests rule: protect-shell-rc
 // Tests rule: protect-ssh-authorized-keys
-// Tests rule: detect-private-key-write
 // Tests rule: protect-desktop-app-tokens
 // Tests rule: protect-os-keychains
 // Tests rule: protect-github-cli
+// Tests rule: detect-private-key-write
 // Tests rule: block-eval-exec
 // NOTE: protect-crust-api is hardcoded in engine.go (not a YAML rule)
 func TestBuiltinRulesLoad(t *testing.T) {

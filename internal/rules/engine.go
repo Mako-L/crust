@@ -101,7 +101,7 @@ var selfProtectSocketRegex = regexp.MustCompile(
 type Engine struct {
 	mu sync.RWMutex
 
-	// Immutable after init (unless --disable-builtin)
+	// Immutable after init; --disable-builtin filters to locked-only
 	builtin []CompiledRule
 
 	// Can be hot-reloaded

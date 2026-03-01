@@ -37,5 +37,5 @@ security:
 rules:
   enabled: true
   user_dir: ""              # default: ~/.crust/rules.d
-  disable_builtin: false    # set true to disable embedded security rules
+  disable_builtin: false    # set true to disable embedded security rules (locked rules remain active)
   watch: true               # enable hot reload via file watching

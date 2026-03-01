@@ -161,7 +161,7 @@ func (c *SecurityConfig) Validate() error {
 type RulesConfig struct {
 	Enabled        bool   `yaml:"enabled"`
 	UserDir        string `yaml:"user_dir"`        // directory for user rules (default: ~/.crust/rules.d)
-	DisableBuiltin bool   `yaml:"disable_builtin"` // disable embedded builtin rules
+	DisableBuiltin bool   `yaml:"disable_builtin"` // disable embedded builtin rules (locked rules remain active)
 	Watch          bool   `yaml:"watch"`           // enable file watching for hot reload
 }
 

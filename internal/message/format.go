@@ -80,3 +80,8 @@ func FormatDLPBlock(ruleName, ruleMessage string) string {
 	return fmt.Sprintf("%s Blocked by rule %q: %s",
 		prefix, ruleName, ruleMessage)
 }
+
+// FormatProtocolError formats the error message for malformed JSON-RPC requests.
+func FormatProtocolError(detail string) string {
+	return prefix + " Blocked: " + detail
+}

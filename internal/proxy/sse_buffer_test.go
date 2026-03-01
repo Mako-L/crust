@@ -166,8 +166,8 @@ func TestBuildBlockedReplacement_WithMessage(t *testing.T) {
 	if !strings.Contains(result["command"], "Bash") || !strings.Contains(result["command"], "Dangerous command") {
 		t.Errorf("command = %q, want blocked message with tool name and reason", result["command"])
 	}
-	if !strings.Contains(result["command"], blockedToolSuffix) {
-		t.Error("command should contain blockedToolSuffix")
+	if !strings.Contains(result["command"], "Do not retry") {
+		t.Error("command should contain 'Do not retry'")
 	}
 	if result["description"] != "Security: blocked tool call" {
 		t.Errorf("description = %q, want %q", result["description"], "Security: blocked tool call")
@@ -180,8 +180,8 @@ func TestBuildBlockedReplacement_WithoutMessage(t *testing.T) {
 	if !strings.Contains(result["command"], "Read") || !strings.Contains(result["command"], "blocked") {
 		t.Errorf("command = %q, want blocked message with tool name", result["command"])
 	}
-	if !strings.Contains(result["command"], blockedToolSuffix) {
-		t.Error("command should contain blockedToolSuffix")
+	if !strings.Contains(result["command"], "Do not retry") {
+		t.Error("command should contain 'Do not retry'")
 	}
 }
 

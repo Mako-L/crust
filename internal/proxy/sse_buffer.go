@@ -9,14 +9,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
 	"github.com/BakeLens/crust/internal/shellutil"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/types"
 )
-
-const blockedToolSuffix = " Please inform the user and try a different approach."
 
 // SSEEvent represents a buffered SSE event
 type SSEEvent struct {
@@ -94,11 +93,7 @@ var shellToolNames = []string{"Bash", "bash", "Shell", "shell", "Execute", "exec
 
 // buildBlockedReplacement constructs the replacement command input for a blocked tool call.
 func buildBlockedReplacement(toolName string, matchResult rules.MatchResult) map[string]string {
-	msg := fmt.Sprintf("[Crust] Tool '%s' blocked.", toolName)
-	if matchResult.Message != "" {
-		msg = fmt.Sprintf("[Crust] Tool '%s' blocked: %s.", toolName, matchResult.Message)
-	}
-	msg += blockedToolSuffix
+	msg := message.FormatReplaceInline(toolName, matchResult)
 	cmd, err := shellutil.Command("echo", msg)
 	if err != nil {
 		cmd = "echo '[Crust] Tool blocked.'"

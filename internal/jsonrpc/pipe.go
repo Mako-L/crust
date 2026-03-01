@@ -113,7 +113,7 @@ func processMessage(log *logger.Logger, engine *rules.Engine, line []byte, msg *
 	if err != nil {
 		log.Warn("Blocked %s %s: %v", protocol, msg.Method, err)
 		if msg.IsRequest() {
-			SendBlockError(log, errWriter, msg.ID, "[Crust] Blocked: malformed params for "+msg.Method)
+			SendBlockError(log, errWriter, msg.ID, message.FormatProtocolError("malformed params for "+msg.Method))
 		}
 		return resultBlocked
 	}

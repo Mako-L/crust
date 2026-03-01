@@ -3,7 +3,6 @@ package rules
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/BakeLens/crust/internal/pathutil"
@@ -66,7 +65,7 @@ func NewNormalizerWithEnv(homeDir, workDir string, env map[string]string) *Norma
 //  4. Convert relative paths to absolute
 //  5. Resolve parent directory references (../)
 //  6. Remove duplicate slashes
-//  7. Clean the path using filepath.Clean
+//  7. Clean the path using pathutil.CleanPath
 func (n *Normalizer) Normalize(path string) string {
 	if path == "" {
 		return ""
@@ -149,20 +148,20 @@ func (n *Normalizer) Normalize(path string) string {
 	// Step 5: Resolve parent directory references
 	// Step 6: Remove duplicate slashes
 	// Step 7: Clean the path
-	path = n.cleanPath(path)
+	path = pathutil.CleanPath(path)
 
 	// Final trim: path cleaning can expose trailing whitespace from segments
-	// like ". " (dot-space) that becomes meaningful after filepath.Clean.
+	// like ". " (dot-space) that becomes meaningful after pathutil.CleanPath.
 	// Loop because Clean may reveal new trailing whitespace from inner
 	// components (e.g., "0 / /" → Clean → "0 / " → Trim+Clean → "0 " → Trim+Clean → "0").
 	// Unbounded loop is safe: each iteration strictly shortens the string
-	// (TrimSpace removes ≥1 char, cleanPath never adds chars).
+	// (TrimSpace removes ≥1 char, pathutil.CleanPath never adds chars).
 	for {
 		trimmed := strings.TrimSpace(path)
 		if trimmed == path {
 			break
 		}
-		path = n.cleanPath(trimmed)
+		path = pathutil.CleanPath(trimmed)
 	}
 
 	// SECURITY: Lowercase paths on case-insensitive filesystems (NTFS, default
@@ -188,7 +187,7 @@ func (n *Normalizer) NormalizeAll(paths []string) []string {
 
 // NormalizePattern normalizes a glob pattern for profile generation.
 // Unlike Normalize(), it does NOT convert relative paths to absolute or run
-// filepath.Clean, which would destroy glob syntax like ** and *.
+// pathutil.CleanPath, which would destroy glob syntax like ** and *.
 // It applies: null byte removal, NFKC, confusable stripping, tilde expansion,
 // and environment variable expansion.
 func (n *Normalizer) NormalizePattern(pattern string) string {
@@ -262,20 +261,12 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	if runtime.GOOS == "windows" {
-		// On Windows, only accept drive letter paths that are absolute
-		// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
-		// a root slash and can't be resolved without knowing the current
-		// directory on that drive — treat them as relative.
-		if len(path) >= 3 && path[1] == ':' && path[2] == '/' && pathutil.IsDriverLetter(path[0]) {
-			return path
-		}
-	} else {
-		// On Unix, filepath.IsAbs is reliable (just checks for / prefix,
-		// which we already handled above).
-		if filepath.IsAbs(path) {
-			return path
-		}
+	// On Windows, only accept drive letter paths that are absolute
+	// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
+	// a root slash and can't be resolved without knowing the current
+	// directory on that drive — treat them as relative.
+	if pathutil.IsDrivePath(path) && len(path) >= 3 && path[2] == '/' {
+		return path
 	}
 
 	// No working directory, can't make absolute
@@ -290,11 +281,6 @@ func (n *Normalizer) makeAbsolute(path string) string {
 
 	// Handle ../ prefix or just a relative path
 	return filepath.Join(n.workDir, path)
-}
-
-// cleanPath delegates to pathutil.CleanPath for centralized path cleaning.
-func (n *Normalizer) cleanPath(p string) string {
-	return pathutil.CleanPath(p)
 }
 
 // GetHomeDir returns the home directory used by this normalizer.

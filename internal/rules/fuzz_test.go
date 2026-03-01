@@ -63,7 +63,7 @@ func FuzzNormalizerBypass(f *testing.F) {
 		}
 
 		// INVARIANT 4: Result must not contain "/../" segments after cleaning
-		// (filepath.Clean should handle this, but verify).
+		// (pathutil.CleanPath should handle this, but verify).
 		if strings.Contains(result, "/../") {
 			t.Errorf("Normalize result still contains /../: input=%q result=%q", path, result)
 		}

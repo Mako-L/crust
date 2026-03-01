@@ -149,51 +149,11 @@ func TestNormalizer_Normalize(t *testing.T) {
 			expected: "/home/foo",
 		},
 
-		// 6. Path traversal normalization
-		{
-			name:     "absolute path with parent ref",
-			input:    "/tmp/../home/user",
-			expected: "/home/user",
-		},
-		{
-			name:     "absolute path with multiple parent refs",
-			input:    "/a/b/c/../../d",
-			expected: "/a/d",
-		},
-		{
-			name:     "absolute path with dot",
-			input:    "/foo/./bar",
-			expected: "/foo/bar",
-		},
-		{
-			name:     "parent ref at root level",
-			input:    "/../foo",
-			expected: "/foo",
-		},
+		// 6. Pure path cleaning (traversal, double slashes) is tested
+		// exhaustively in pathutil_test.go:TestCleanPath.
+		// Here we only test interaction with variable expansion.
 
-		// 7. Double slashes
-		{
-			name:     "double slash at start",
-			input:    "//foo",
-			expected: "/foo",
-		},
-		{
-			name:     "double slash in middle",
-			input:    "/foo//bar",
-			expected: "/foo/bar",
-		},
-		{
-			name:     "multiple double slashes",
-			input:    "/foo//bar//baz",
-			expected: "/foo/bar/baz",
-		},
-		{
-			name:     "triple slash",
-			input:    "///foo",
-			expected: "/foo",
-		},
-
-		// 8. Combinations
+		// 7. Combinations
 		{
 			name:     "$HOME with parent ref",
 			input:    "$HOME/../other",

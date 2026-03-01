@@ -228,7 +228,7 @@ func init() {
 func hasCryptoWalletPath(paths []string) (bool, string) {
 	fs := pathutil.DefaultFS()
 	for _, p := range paths {
-		cleaned := fs.Lower(filepath.Clean(p))
+		cleaned := fs.Lower(pathutil.CleanPath(p))
 		for _, dir := range cryptoWalletDirs {
 			if pathutil.HasPathPrefix(cleaned, dir) {
 				return true, p

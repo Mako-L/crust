@@ -638,16 +638,16 @@ readLoop:
 					raw := data[:idx+4]
 					eventType, jsonData := parseSSEEventData(eventData)
 					if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-						log.Warn("Buffer error: %v, flushing immediately", err)
-						// On buffer error (timeout/size exceeded), flush what we have and stream rest
-						if flushErr := buffer.FlushAll(); flushErr != nil {
-							log.Warn("FlushAll error during recovery: %v", flushErr)
+						log.Warn("Buffer overflow: %v — evaluating buffered events, dropping remainder (fail-closed)", err)
+						// SECURITY: Evaluate buffered events through rule engine.
+						// Do NOT forward the overflow event or remaining stream — they are uninspected.
+						if flushErr := buffer.FlushModified(interceptor, secCfg.BlockMode); flushErr != nil {
+							log.Error("FlushModified error during overflow: %v", flushErr)
 						}
-						// Write the event that caused the overflow, then remaining data
-						_, _ = ctx.Writer.Write(raw)
-						_, _ = ctx.Writer.Write(data[idx+4:])
-						// Stream rest directly
-						_, _ = io.Copy(ctx.Writer, resp.Body)
+						injectOverflowWarning(ctx.Writer)
+						if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+							log.Debug("Failed to drain upstream response: %v", drainErr)
+						}
 						bufferOverflowed = true
 						break readLoop
 					}
@@ -660,14 +660,14 @@ readLoop:
 				raw := data[:idx+2]
 				eventType, jsonData := parseSSEEventData(eventData)
 				if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-					log.Warn("Buffer error: %v, flushing immediately", err)
-					if flushErr := buffer.FlushAll(); flushErr != nil {
-						log.Warn("FlushAll error during recovery: %v", flushErr)
+					log.Warn("Buffer overflow: %v — evaluating buffered events, dropping remainder (fail-closed)", err)
+					if flushErr := buffer.FlushModified(interceptor, secCfg.BlockMode); flushErr != nil {
+						log.Error("FlushModified error during overflow: %v", flushErr)
 					}
-					// Write the event that caused the overflow, then remaining data
-					_, _ = ctx.Writer.Write(raw)
-					_, _ = ctx.Writer.Write(data[idx+2:])
-					_, _ = io.Copy(ctx.Writer, resp.Body)
+					injectOverflowWarning(ctx.Writer)
+					if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
+						log.Debug("Failed to drain upstream response: %v", drainErr)
+					}
 					bufferOverflowed = true
 					break readLoop
 				}
@@ -737,6 +737,17 @@ readLoop:
 }
 
 // stripAPIPrefix removes a leading "/api" segment from the request path.
+// injectOverflowWarning writes a truncation warning to the SSE stream when
+// the buffer overflows. This tells the AI agent that the response was cut short.
+func injectOverflowWarning(w http.ResponseWriter) {
+	const warning = "[Crust] Response truncated: buffer limit exceeded. Some content may be missing."
+	// Write as an SSE comment — parseable by all SSE clients, ignored by event handlers.
+	_, _ = fmt.Fprintf(w, ": %s\n\n", warning)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // Some IDE clients prepend /api/ when targeting an OpenAI-compatible
 // endpoint. Only strips when "/api" is followed by "/" or is the entire
 // path — "/apis/..." is left untouched.

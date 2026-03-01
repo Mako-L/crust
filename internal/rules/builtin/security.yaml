@@ -456,7 +456,7 @@ rules:
   - name: detect-reverse-shell
     locked: true
     match:
-      command: "re:/dev/tcp/|/dev/udp/|\\bnc\\b.*\\s-e\\s|\\bncat\\b.*(\\s-e\\s|\\s--exec\\s|\\s--sh-exec\\s)|\\bsocat\\b.*\\bexec\\b"
+      command: "re:/dev/tcp/|/dev/udp/|\\bnc(?:\\.traditional|\\.openbsd)?\\b.*\\s-e\\s|\\bncat\\b.*(\\s-e\\s|\\s--exec[\\s=]|\\s--sh-exec[\\s=])|\\bsocat\\b.*\\bexec\\b"
     actions: [execute, read, network]
     message: "Blocked: reverse shell pattern detected (/dev/tcp, nc -e, socat exec)."
     severity: critical

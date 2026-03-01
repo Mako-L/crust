@@ -563,23 +563,25 @@ func defaultCommandDB() map[string]CommandInfo {
 		// ===========================================
 		// NETWORK OPERATIONS
 		// ===========================================
-		"curl":     {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-o", "--output"}},
-		"wget":     {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-O", "--output-document", "--post-file", "--body-file"}},
-		"nc":       {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"netcat":   {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"ssh":      {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"sftp":     {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"ftp":      {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"telnet":   {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"nmap":     {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2, 3}},
-		"ping":     {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"dig":      {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"nslookup": {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"socat":    {Operation: OpRead, PathArgIndex: []int{0, 1}}, // can read files (socat - /path) and network
-		"ncat":     {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"aria2c":   {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"http":     {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2}},
-		"whois":    {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"curl":           {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-o", "--output"}},
+		"wget":           {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-O", "--output-document", "--post-file", "--body-file"}},
+		"nc":             {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"nc.traditional": {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"nc.openbsd":     {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"netcat":         {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"ssh":            {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"sftp":           {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"ftp":            {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"telnet":         {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"nmap":           {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2, 3}},
+		"ping":           {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"dig":            {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"nslookup":       {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"socat":          {Operation: OpRead, PathArgIndex: []int{0, 1}}, // can read files (socat - /path) and network
+		"ncat":           {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"aria2c":         {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"http":           {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2}},
+		"whois":          {Operation: OpNetwork, PathArgIndex: []int{0}},
 
 		// Credential/cloud tools (can expose secrets via network)
 		"git":     {Operation: OpNetwork, PathArgIndex: []int{1, 2, 3}},

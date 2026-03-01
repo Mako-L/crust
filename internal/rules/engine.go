@@ -101,7 +101,7 @@ var selfProtectSocketRegex = regexp.MustCompile(
 type Engine struct {
 	mu sync.RWMutex
 
-	// Immutable after init (unless --disable-builtin)
+	// Immutable after init; --disable-builtin filters to locked-only
 	builtin []CompiledRule
 
 	// Can be hot-reloaded
@@ -219,28 +219,38 @@ func NewEngineWithNormalizer(cfg EngineConfig, normalizer *Normalizer) (*Engine,
 		}
 	}
 
-	// Load builtin rules (unless disabled)
+	// Load builtin rules
+	builtinRules, err := loader.LoadBuiltin()
+	if err != nil {
+		return nil, err
+	}
+
+	// Add dynamic protection rules based on config (always locked)
+	dynamicRules := generateProtectionRules(cfg)
+	builtinRules = append(dynamicRules, builtinRules...)
+
+	if cfg.DisableBuiltin {
+		// Keep only locked rules — they cannot be disabled
+		var locked []Rule
+		for _, r := range builtinRules {
+			if r.IsLocked() {
+				locked = append(locked, r)
+			}
+		}
+		log.Warn("Builtin rules disabled (%d locked rules remain active)", len(locked))
+		builtinRules = locked
+	}
+
+	// Expand $HOME in YAML rule paths to actual home directory
+	builtinRules = expandRuleHomes(builtinRules, normalizer.GetHomeDir())
+
+	compiled, err := e.compileRules(builtinRules, true)
+	if err != nil {
+		return nil, err
+	}
+	e.builtin = compiled
 	if !cfg.DisableBuiltin {
-		builtinRules, err := loader.LoadBuiltin()
-		if err != nil {
-			return nil, err
-		}
-
-		// Add dynamic protection rules based on config
-		dynamicRules := generateProtectionRules(cfg)
-		builtinRules = append(dynamicRules, builtinRules...)
-
-		// Expand $HOME in YAML rule paths to actual home directory
-		builtinRules = expandRuleHomes(builtinRules, normalizer.GetHomeDir())
-
-		compiled, err := e.compileRules(builtinRules, true)
-		if err != nil {
-			return nil, err
-		}
-		e.builtin = compiled
 		log.Info("Loaded %d builtin rules (%d dynamic)", len(compiled), len(dynamicRules))
-	} else {
-		log.Warn("Builtin rules disabled")
 	}
 
 	// Load user rules
@@ -300,11 +310,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-rules-dir-delete",
 		Description: "Block deletion of Crust rules directory",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{cfg.UserRulesDir + "/**"},
 		},
 		Actions:  []Operation{OpDelete},
-		Message:  "BLOCKED: Cannot delete Crust rules directory",
+		Message:  "Blocked: Crust rules directory is protected from deletion.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})
@@ -313,11 +324,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-rule-file-write",
 		Description: "Block direct modification of rule files",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{cfg.UserRulesDir + "/*.yaml"},
 		},
 		Actions:  []Operation{OpWrite},
-		Message:  "BLOCKED: Cannot modify Crust rule files directly",
+		Message:  "Blocked: Crust rule files cannot be modified directly. Use the API.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})
@@ -326,11 +338,12 @@ func generateProtectionRules(cfg EngineConfig) []Rule {
 	rules = append(rules, Rule{
 		Name:        "block-crust-socket-access",
 		Description: "Block access to Crust management API sockets",
+		Locked:      lockedTrue,
 		Block: Block{
 			Paths: []string{"**/.crust/crust-api-*.sock", "**/.crust/*.sock"},
 		},
 		Actions:  []Operation{OpRead, OpWrite, OpDelete},
-		Message:  "BLOCKED: Cannot access Crust management socket",
+		Message:  "Blocked: Crust management socket is protected.",
 		Severity: SeverityCritical,
 		Source:   SourceBuiltin,
 	})
@@ -867,6 +880,19 @@ func (e *Engine) RuleCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.merged)
+}
+
+// LockedRuleCount returns the number of locked builtin rules
+func (e *Engine) LockedRuleCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	count := 0
+	for _, cr := range e.builtin {
+		if cr.Rule.IsLocked() {
+			count++
+		}
+	}
+	return count
 }
 
 // GetLoader returns the rule loader

@@ -6,23 +6,25 @@ rules:
     block: ["**/.env", "**/.env.*"]
     except: ["**/.env.example", "**/.env.template"]
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access .env files - may contain secrets"
+    message: "Blocked: .env files contain secrets (API keys, passwords). Ask the user to provide values instead."
     severity: critical
 
   - name: protect-ssh-keys
+    locked: true
     block:
       - "$HOME/.ssh/id_*"
       - "$HOME/.ssh/config"
     except:
       - "$HOME/.ssh/id_*.pub"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access SSH private keys or config"
+    message: "Blocked: SSH private keys are authentication credentials."
     severity: critical
 
   # ===========================================================================
   # 2. SYSTEM AUTHENTICATION FILES
   # ===========================================================================
   - name: protect-system-auth
+    locked: true
     block:
       - "/etc/passwd"
       - "/etc/shadow"
@@ -30,24 +32,26 @@ rules:
       - "/etc/sudoers"
       - "/etc/sudoers.d/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access system authentication files"
+    message: "Blocked: system authentication files contain credentials (/etc/shadow, /etc/sudoers)."
     severity: critical
 
   # ===========================================================================
   # 3. SELF PROTECTION
   # ===========================================================================
   - name: protect-crust
+    locked: true
     block:
       - "**/.crust/**"
       - "**/crust*.db"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access Crust data"
+    message: "Blocked: Crust internal data is protected from tampering."
     severity: critical
 
   # ===========================================================================
   # 4. SHELL HISTORY PROTECTION
   # ===========================================================================
   - name: protect-shell-history
+    locked: true
     block:
       - "$HOME/.bash_history"
       - "$HOME/.zsh_history"
@@ -62,13 +66,14 @@ rules:
       # Fish stores history in XDG data dir, not dotfile
       - "$HOME/.local/share/fish/fish_history"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access shell history files"
+    message: "Blocked: shell history may contain passwords and tokens typed on the command line."
     severity: high
 
   # ===========================================================================
   # 5. CLOUD CREDENTIALS PROTECTION
   # ===========================================================================
   - name: protect-cloud-credentials
+    locked: true
     block:
       # AWS (credentials only — .aws/config has non-sensitive region/profile settings)
       - "$HOME/.aws/credentials"
@@ -86,13 +91,14 @@ rules:
       - "**/terraform.tfstate"
       - "**/terraform.tfstate.backup"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access cloud credentials"
+    message: "Blocked: cloud credential files contain authentication secrets. Use environment variables instead."
     severity: critical
 
   # ===========================================================================
   # 6. GPG/PGP KEY PROTECTION
   # ===========================================================================
   - name: protect-gpg-keys
+    locked: true
     block:
       - "$HOME/.gnupg/private-keys-v1.d/**"
       - "$HOME/.gnupg/secring.gpg"
@@ -100,7 +106,7 @@ rules:
       - "$HOME/.gnupg/random_seed"
     # No except needed — block list targets only private key material
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access GPG private keys"
+    message: "Blocked: GPG private keys are cryptographic credentials."
     severity: critical
 
   # ===========================================================================
@@ -146,13 +152,14 @@ rules:
       - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Login Data"
       - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Cookies"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access browser sensitive data"
+    message: "Blocked: browser data contains saved passwords, cookies, and session tokens."
     severity: high
 
   # ===========================================================================
   # 8. GIT CREDENTIALS PROTECTION
   # ===========================================================================
   - name: protect-git-credentials
+    locked: true
     block:
       - "**/.git-credentials"
       - "**/.config/git/credentials"
@@ -160,7 +167,7 @@ rules:
       - "$HOME/.netrc"
       - "$HOME/_netrc"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access git/network credentials"
+    message: "Blocked: git credential files (.git-credentials, .netrc) contain plaintext auth tokens."
     severity: critical
 
   # ===========================================================================
@@ -191,7 +198,7 @@ rules:
       - "$HOME/.m2/settings.xml"
       - "$HOME/.m2/settings-security.xml"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access package manager tokens"
+    message: "Blocked: package manager configs (.npmrc, .pypirc) may contain registry auth tokens."
     severity: high
 
   # ===========================================================================
@@ -210,25 +217,27 @@ rules:
       - "$HOME/.config/fish/config.fish"
       - "$HOME/.config/fish/conf.d/**"
     actions: [write, delete]
-    message: "Cannot modify shell startup files - persistence vector"
+    message: "Blocked: modifying shell startup files is a persistence attack vector."
     severity: critical
 
   # ===========================================================================
   # 11. SSH AUTHORIZED KEYS PROTECTION
   # ===========================================================================
   - name: protect-ssh-authorized-keys
+    locked: true
     block:
       - "$HOME/.ssh/authorized_keys"
       - "$HOME/.ssh/authorized_keys2"
       - "$HOME/.ssh/known_hosts"
     actions: [write, delete]
-    message: "Cannot modify SSH authorized keys or known hosts - persistence vector"
+    message: "Blocked: modifying authorized_keys enables unauthorized remote access."
     severity: critical
 
   # ===========================================================================
   # 12. DESKTOP APP TOKEN PROTECTION
   # ===========================================================================
   - name: protect-desktop-app-tokens
+    locked: true
     block:
       # Electron apps store session tokens in LevelDB/SQLite under app data dirs.
       # No legitimate AI coding agent reads these — MCP integrations use API
@@ -317,13 +326,14 @@ rules:
       - "$HOME/.config/Notion/**"
       - "$HOME/AppData/Roaming/Notion/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access desktop app data - may contain session tokens"
+    message: "Blocked: desktop app data contains session tokens (Discord, Slack, Telegram, etc.)."
     severity: critical
 
   # ===========================================================================
   # 13. OS KEYCHAIN / SECRET STORE PROTECTION
   # ===========================================================================
   - name: protect-os-keychains
+    locked: true
     block:
       # macOS Keychain files (login.keychain-db contains all saved passwords)
       - "$HOME/Library/Keychains/**"
@@ -333,7 +343,7 @@ rules:
       # KDE Wallet
       - "$HOME/.local/share/kwalletd/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access OS keychain/secret store - contains all saved passwords"
+    message: "Blocked: OS keychain contains all saved passwords and credentials."
     severity: critical
 
   # ===========================================================================
@@ -344,7 +354,7 @@ rules:
       - "$HOME/.config/gh/hosts.yml"
       - "$HOME/AppData/Roaming/GitHub CLI/hosts.yml"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access GitHub CLI credentials"
+    message: "Blocked: GitHub CLI hosts.yml contains OAuth tokens. Use `gh` CLI or env vars instead."
     severity: critical
 
   # ===========================================================================
@@ -354,7 +364,7 @@ rules:
     match:
       content: "re:-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
     actions: [write]
-    message: "Cannot write private key content - potential key exfiltration"
+    message: "Blocked: writing private key material is a potential exfiltration vector."
     severity: critical
 
   # ===========================================================================
@@ -364,5 +374,102 @@ rules:
     match:
       command: "re:\\beval\\b|\\bexec\\b"
     actions: [execute]
-    message: "eval/exec prevents static security analysis. Use direct commands instead."
+    message: "Blocked: eval/exec prevents static security analysis. Use direct commands instead."
     severity: high
+
+  # ===========================================================================
+  # 17. SYSTEM CONFIGURATION PROTECTION
+  # Protects critical OS config files from agent tampering.
+  # Read is allowed (debugging); only writes/deletes are blocked.
+  # ===========================================================================
+  - name: protect-system-config
+    locked: true
+    block:
+      # DNS — silent traffic redirection
+      - "/etc/hosts"
+      - "/etc/resolv.conf"
+      # SSH server config — weaken remote access security
+      - "/etc/ssh/**"
+      # PAM — bypass or weaken authentication
+      - "/etc/pam.d/**"
+      # Dynamic linker — library injection / rootkit
+      - "/etc/ld.so.preload"
+      - "/etc/ld.so.conf"
+      - "/etc/ld.so.conf.d/**"
+      # System-wide shell config — persistence for all users
+      - "/etc/profile"
+      - "/etc/profile.d/**"
+      - "/etc/environment"
+      - "/etc/bash.bashrc"
+      - "/etc/zsh/**"
+      - "/etc/zshrc"
+    actions: [write, delete]
+    message: "Blocked: system config files (/etc/hosts, /etc/ssh, PAM) control OS security."
+    severity: critical
+
+  # ===========================================================================
+  # 18. PERSISTENCE VECTOR PROTECTION
+  # Blocks agent writes to scheduled tasks, init scripts, and autostart entries.
+  # Shell RC files are covered separately by protect-shell-rc.
+  # ===========================================================================
+  - name: protect-persistence
+    locked: true
+    block:
+      # cron (Linux)
+      - "/etc/crontab"
+      - "/etc/cron.d/**"
+      - "/etc/cron.daily/**"
+      - "/etc/cron.hourly/**"
+      - "/etc/cron.weekly/**"
+      - "/etc/cron.monthly/**"
+      - "/var/spool/cron/**"
+      # cron (macOS)
+      - "/var/at/**"
+      - "/usr/lib/cron/**"
+      # init / rc (legacy SysV)
+      - "/etc/init.d/**"
+      - "/etc/rc.local"
+      - "/etc/rc.d/**"
+      # systemd (system-level)
+      - "/etc/systemd/system/**"
+      - "/usr/lib/systemd/system/**"
+      # systemd (user-level)
+      - "$HOME/.config/systemd/user/**"
+      - "$HOME/.local/share/systemd/user/**"
+      # launchd (macOS)
+      - "/Library/LaunchDaemons/**"
+      - "/Library/LaunchAgents/**"
+      - "$HOME/Library/LaunchAgents/**"
+      # XDG autostart (Linux desktop)
+      - "$HOME/.config/autostart/**"
+      - "/etc/xdg/autostart/**"
+    actions: [write, delete]
+    message: "Blocked: cron/launchd/systemd entries are persistence vectors — malware uses these to survive reboot."
+    severity: critical
+
+  # ===========================================================================
+  # 19. REVERSE SHELL DETECTION
+  # Blocks unambiguous reverse shell patterns in commands.
+  # /dev/tcp is a bash built-in network device with no legitimate coding use.
+  # nc/ncat -e and socat exec bind a shell to a network socket.
+  # ===========================================================================
+  - name: detect-reverse-shell
+    locked: true
+    match:
+      command: "re:/dev/tcp/|/dev/udp/|\\bnc(?:\\.traditional|\\.openbsd)?\\b.*\\s-e\\s|\\bncat\\b.*(\\s-e\\s|\\s--exec[\\s=]|\\s--sh-exec[\\s=])|\\bsocat\\b.*\\bexec\\b"
+    actions: [execute, read, network]
+    message: "Blocked: reverse shell pattern detected (/dev/tcp, nc -e, socat exec)."
+    severity: critical
+
+  # ===========================================================================
+  # 20. CLOUD METADATA SSRF PROTECTION
+  # Blocks agent access to cloud instance metadata endpoints (IMDS).
+  # Covers AWS, Azure, GCP, DigitalOcean, Oracle Cloud, Alibaba Cloud.
+  # ===========================================================================
+  - name: block-ssrf-metadata
+    locked: true
+    match:
+      host: "re:^169\\.254\\.169\\.254$|^metadata\\.google\\.internal$|^100\\.100\\.100\\.200$|^fd00:ec2::254$"
+    actions: [read, write, network]
+    message: "Blocked: cloud metadata endpoint exposes IAM credentials — SSRF attack vector."
+    severity: critical

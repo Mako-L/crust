@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/types"
@@ -845,7 +846,7 @@ func TestBuildWarningContent(t *testing.T) {
 					},
 				},
 			},
-			wantContains: []string{"[Crust]", "Bash", "Dangerous command"},
+			wantContains: []string{"[Crust]", "Bash", "Dangerous command", "Do not retry"},
 		},
 		{
 			name: "multiple blocked calls",
@@ -867,7 +868,7 @@ func TestBuildWarningContent(t *testing.T) {
 					},
 				},
 			},
-			wantContains: []string{"[Crust]", "Bash", "Read", "Blocked rm", "Blocked credential read"},
+			wantContains: []string{"[Crust]", "Bash", "Read", "Blocked rm", "Blocked credential read", "Do not retry"},
 		},
 		{
 			name: "blocked call without message",
@@ -879,7 +880,7 @@ func TestBuildWarningContent(t *testing.T) {
 					MatchResult: rules.MatchResult{},
 				},
 			},
-			wantContains: []string{"[Crust]", "Write"},
+			wantContains: []string{"[Crust]", "Write", "Do not retry"},
 		},
 	}
 
@@ -896,8 +897,8 @@ func TestBuildWarningContent(t *testing.T) {
 	}
 }
 
-// TestBuildReplaceMessage tests the replace message builder
-func TestBuildReplaceMessage(t *testing.T) {
+// TestFormatReplaceDetail tests the replace message detail formatter (via message package).
+func TestFormatReplaceDetail(t *testing.T) {
 	tests := []struct {
 		name         string
 		matchResult  rules.MatchResult
@@ -922,21 +923,19 @@ func TestBuildReplaceMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildReplaceMessage(tt.matchResult)
+			result := message.FormatReplaceDetail(tt.matchResult)
 			if result != tt.wantContains {
-				t.Errorf("buildReplaceMessage() = %q, want %q", result, tt.wantContains)
+				t.Errorf("FormatReplaceDetail() = %q, want %q", result, tt.wantContains)
 			}
 		})
 	}
 }
 
-// TestBuildReplaceWarning tests the replace warning builder
-func TestBuildReplaceWarning(t *testing.T) {
-	blockedCalls := []BlockedToolCall{
+// TestFormatReplaceWarning tests the replace warning builder (via message package).
+func TestFormatReplaceWarning(t *testing.T) {
+	blocked := []message.BlockedCall{
 		{
-			ToolCall: telemetry.ToolCall{
-				Name: "Bash",
-			},
+			ToolName: "Bash",
 			MatchResult: rules.MatchResult{
 				RuleName: "block-bash",
 				Message:  "Dangerous",
@@ -944,7 +943,7 @@ func TestBuildReplaceWarning(t *testing.T) {
 		},
 	}
 
-	result := buildReplaceWarning(blockedCalls)
+	result := message.FormatReplaceWarning(blocked)
 
 	wantContains := []string{
 		"[Crust]",
@@ -952,11 +951,12 @@ func TestBuildReplaceWarning(t *testing.T) {
 		"Bash",
 		"Dangerous",
 		"block-bash",
+		"Do not retry",
 	}
 
 	for _, want := range wantContains {
 		if !strings.Contains(result, want) {
-			t.Errorf("buildReplaceWarning() = %q, want to contain %q", result, want)
+			t.Errorf("FormatReplaceWarning() = %q, want to contain %q", result, want)
 		}
 	}
 }

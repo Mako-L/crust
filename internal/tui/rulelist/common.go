@@ -28,7 +28,13 @@ func RenderPlain(rulesList []rules.Rule, total int) error {
 	}
 
 	if len(builtinRules) > 0 {
-		fmt.Println("--- Builtin Rules ---")
+		locked := 0
+		for _, r := range builtinRules {
+			if r.IsLocked() {
+				locked++
+			}
+		}
+		fmt.Printf("--- Builtin Rules (%d locked) ---\n", locked)
 		fmt.Println()
 		for _, r := range builtinRules {
 			PrintRule(r, "  ")
@@ -64,7 +70,11 @@ func PrintRule(r rules.Rule, prefix string) {
 	if !enabled {
 		status = "[OFF]"
 	}
-	fmt.Printf("%s%s %s\n", prefix, status, r.Name)
+	lockTag := ""
+	if r.IsLocked() {
+		lockTag = " [locked]"
+	}
+	fmt.Printf("%s%s %s%s\n", prefix, status, r.Name, lockTag)
 
 	desc := r.Description
 	if desc == "" {

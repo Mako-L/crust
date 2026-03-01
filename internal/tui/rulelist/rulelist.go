@@ -130,7 +130,11 @@ func (d ruleDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		icon = tui.StyleMuted.Render(tui.IconCircle)
 		name = tui.Strikethrough(ri.rule.Name)
 	}
-	title := icon + " " + name
+	lockIndicator := ""
+	if ri.rule.IsLocked() {
+		lockIndicator = " " + tui.IconLock
+	}
+	title := icon + " " + name + lockIndicator
 	desc := ri.Description()
 
 	if selected {
@@ -224,6 +228,13 @@ func buildListItems(rulesList []rules.Rule) []list.Item {
 
 	// Builtin rules
 	if len(builtinRules) > 0 {
+		locked := 0
+		for _, r := range builtinRules {
+			if r.IsLocked() {
+				locked++
+			}
+		}
+		items = append(items, headerItem{title: fmt.Sprintf("Builtin Rules (%d locked)", locked)})
 		for _, r := range builtinRules {
 			items = append(items, ruleItem{rule: r})
 		}

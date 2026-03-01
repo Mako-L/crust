@@ -691,6 +691,10 @@ func TestExtractHostFromURL(t *testing.T) {
 		{"http://127.0.1:9090/api", "127.0.0.1"},
 		{"http://10.1:8080/path", "10.0.0.1"},
 		{"http://192.168.1:80/path", "192.168.0.1"},
+		// Trailing-dot (FQDN) bypass — must be stripped before matching
+		{"http://metadata.google.internal./computeMetadata/v1/", "metadata.google.internal"},
+		{"https://example.com./path", "example.com"},
+		{"http://169.254.169.254./latest/meta-data/", "169.254.169.254"},
 	}
 
 	for _, tt := range tests {

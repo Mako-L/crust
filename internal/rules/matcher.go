@@ -24,8 +24,9 @@ func NewMatcher(patterns, excepts []string) (*Matcher, error) {
 		excepts:  make([]glob.Glob, 0, len(excepts)),
 	}
 
-	// Compile patterns (lowercased on case-insensitive filesystems)
+	// Compile patterns (normalize separators + lowercase on case-insensitive filesystems)
 	for _, p := range patterns {
+		p = pathutil.ToSlash(p) // normalize \ to / so patterns match forward-slash paths on Windows
 		g, err := glob.Compile(fs.Lower(p), '/')
 		if err != nil {
 			return nil, err
@@ -33,8 +34,9 @@ func NewMatcher(patterns, excepts []string) (*Matcher, error) {
 		m.patterns = append(m.patterns, g)
 	}
 
-	// Compile excepts (lowercased on case-insensitive filesystems)
+	// Compile excepts (normalize separators + lowercase on case-insensitive filesystems)
 	for _, e := range excepts {
+		e = pathutil.ToSlash(e) // normalize \ to / so excepts match forward-slash paths on Windows
 		g, err := glob.Compile(fs.Lower(e), '/')
 		if err != nil {
 			return nil, err

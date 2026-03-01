@@ -1227,14 +1227,11 @@ func TestAgent_OpenAIResponses_Streaming(t *testing.T) {
 // Once fixed, these serve as regression tests.
 // ===========================================================================
 
-// Bug 1: handleBufferedStreamingRequest drops the SSE event that triggers
-// buffer overflow. When BufferEvent returns an error (buffer full), the code:
-//
-//	FlushAll()                        // sends previously-buffered events
-//	ctx.Writer.Write(data[idx+2:])    // writes data AFTER the separator
-//
-// The event that caused the overflow (data[:idx+2]) is never written.
-func TestBug_BufferOverflowDropsEvent(t *testing.T) {
+// Bug 1 (fixed): On buffer overflow, the handler now evaluates buffered events
+// through the rule engine via FlushModified() and drops uninspected overflow
+// events (fail-closed). Previously FlushAll() sent events without evaluation
+// and io.Copy streamed the remainder unfiltered — a security bypass.
+func TestBug_BufferOverflowFailsClosed(t *testing.T) {
 	// 3-event stream; buffer holds only 2 events → 3rd triggers overflow
 	stream := "data: {\"seq\":1}\n\n" +
 		"data: {\"seq\":2}\n\n" +
@@ -1244,9 +1241,9 @@ func TestBug_BufferOverflowDropsEvent(t *testing.T) {
 	buffer := NewBufferedSSEWriter(w, 2, 30*time.Second,
 		"t", "s", "m", types.APITypeOpenAICompletion, nil)
 
-	// Replicate the exact read-loop logic from handleBufferedStreamingRequest
+	// Replicate the new fail-closed overflow logic
 	data := []byte(stream)
-	var overflowRemainder []byte
+	overflowed := false
 
 	for {
 		idx := bytes.Index(data, []byte("\n\n"))
@@ -1258,27 +1255,36 @@ func TestBug_BufferOverflowDropsEvent(t *testing.T) {
 		eventType, jsonData := parseSSEEventData(eventData)
 
 		if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-			// Fixed pattern: flush buffered events, then write the overflow event + remainder
-			_ = buffer.FlushAll()
-			overflowRemainder = append(append([]byte{}, raw...), data[idx+2:]...)
+			// SECURITY: Evaluate buffered events, drop the rest (fail-closed)
+			_ = buffer.FlushModified(nil, types.BlockModeRemove) // nil interceptor → flushes as-is (no tool use)
+			injectOverflowWarning(w)
+			overflowed = true
 			break
 		}
 		data = data[idx+2:]
 	}
 
-	// Combine flushed output + what the caller would write after overflow
-	clientReceived := w.Body.String() + string(overflowRemainder)
-
-	if !strings.Contains(clientReceived, `"seq":1`) ||
-		!strings.Contains(clientReceived, `"seq":2`) {
-		t.Fatal("events 1 and 2 should be in output")
+	if !overflowed {
+		// Normal path: flush with evaluation
+		_ = buffer.FlushModified(nil, types.BlockModeRemove)
 	}
 
-	if !strings.Contains(clientReceived, `"seq":3`) {
-		t.Error("BUG: event 3 (the overflow trigger) was silently dropped.\n" +
-			"handleBufferedStreamingRequest writes data[idx+2:] (after separator), " +
-			"skipping the event itself.\n" +
-			"Fix: write the raw event bytes before writing remaining data.")
+	clientReceived := w.Body.String()
+
+	// Buffered events 1 and 2 should be present (they were evaluated)
+	if !strings.Contains(clientReceived, `"seq":1`) ||
+		!strings.Contains(clientReceived, `"seq":2`) {
+		t.Fatal("buffered events 1 and 2 should be in output")
+	}
+
+	// Event 3 must NOT be present — it caused overflow and was not evaluated
+	if strings.Contains(clientReceived, `"seq":3`) {
+		t.Error("SECURITY: overflow event 3 was forwarded without security evaluation")
+	}
+
+	// Truncation warning must be present
+	if !strings.Contains(clientReceived, "[Crust] Response truncated") {
+		t.Error("missing overflow truncation warning")
 	}
 }
 
@@ -1636,10 +1642,10 @@ func TestAgent_ClaudeCode_BufferedStreaming_MultiDataLine(t *testing.T) {
 	}
 }
 
-// TestAgent_OpenAI_BufferOverflowRecovery exercises Bug 1 through the full
+// TestAgent_OpenAI_BufferOverflowFailsClosed exercises Bug 1 through the full
 // buffered streaming pipeline. Configures a small buffer (2 events) and sends
-// 5 OpenAI SSE chunks — verifies none are silently dropped during overflow recovery.
-func TestAgent_OpenAI_BufferOverflowRecovery(t *testing.T) {
+// 5 OpenAI SSE chunks — verifies overflow events are dropped (fail-closed).
+func TestAgent_OpenAI_BufferOverflowFailsClosed(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := 1; i <= 5; i++ {
@@ -1703,12 +1709,25 @@ func TestAgent_OpenAI_BufferOverflowRecovery(t *testing.T) {
 
 	respBody := w.Body.String()
 
-	// All 5 events must appear — none silently dropped during overflow recovery
-	for i := 1; i <= 5; i++ {
+	// Buffered events 1-2 should be present (evaluated through rule engine)
+	for i := 1; i <= 2; i++ {
 		chunk := fmt.Sprintf("chunk-%d", i)
 		if !strings.Contains(respBody, chunk) {
-			t.Errorf("event %s missing from response — buffer overflow recovery dropped it", chunk)
+			t.Errorf("buffered event %s missing from response", chunk)
 		}
+	}
+
+	// Overflow events 3-5 must NOT be present — they were not evaluated (fail-closed)
+	for i := 3; i <= 5; i++ {
+		chunk := fmt.Sprintf("chunk-%d", i)
+		if strings.Contains(respBody, chunk) {
+			t.Errorf("SECURITY: overflow event %s was forwarded without security evaluation", chunk)
+		}
+	}
+
+	// Truncation warning must be present
+	if !strings.Contains(respBody, "[Crust] Response truncated") {
+		t.Error("missing overflow truncation warning in response")
 	}
 }
 

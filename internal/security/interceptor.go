@@ -2,10 +2,9 @@ package security
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 	"sync/atomic"
 
+	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/types"
@@ -118,11 +117,9 @@ func (i *Interceptor) InterceptOpenAIResponse(responseBody []byte, traceID, sess
 	if result.HasBlockedCalls && len(resp.Choices) > 0 {
 		var msg string
 		if useReplaceMode {
-			// Replace mode: friendly message about blocked tools
-			msg = buildReplaceWarning(result.BlockedToolCalls)
+			msg = message.FormatReplaceWarning(toBlockedCalls(result.BlockedToolCalls))
 		} else {
-			// Remove mode: standard warning
-			msg = BuildWarningContent(result.BlockedToolCalls)
+			msg = message.FormatRemoveWarning(toBlockedCalls(result.BlockedToolCalls))
 		}
 		if resp.Choices[0].Message.Content == "" {
 			resp.Choices[0].Message.Content = msg
@@ -184,11 +181,9 @@ func (i *Interceptor) InterceptAnthropicResponse(responseBody []byte, traceID, s
 		if blocked {
 			modified = true
 			if useReplaceMode {
-				msg := fmt.Sprintf("\n[Crust] Tool '%s' blocked: %s\nPlease inform the user and try a different approach.\n",
-					block.Name, buildReplaceMessage(matchResult))
 				allowedContent = append(allowedContent, anthropicContentBlock{
 					Type: "text",
-					Text: msg,
+					Text: message.FormatReplaceInline(block.Name, matchResult),
 				})
 			}
 		} else {
@@ -198,10 +193,9 @@ func (i *Interceptor) InterceptAnthropicResponse(responseBody []byte, traceID, s
 
 	// Only inject warning in remove mode
 	if result.HasBlockedCalls && !useReplaceMode {
-		warningContent := BuildWarningContent(result.BlockedToolCalls)
 		allowedContent = append(allowedContent, anthropicContentBlock{
 			Type: "text",
-			Text: warningContent,
+			Text: message.FormatRemoveWarning(toBlockedCalls(result.BlockedToolCalls)),
 		})
 		modified = true
 	}
@@ -260,13 +254,11 @@ func (i *Interceptor) InterceptOpenAIResponsesResponse(responseBody []byte, trac
 		if blocked {
 			modified = true
 			if useReplaceMode {
-				msg := fmt.Sprintf("\n[Crust] Tool '%s' blocked: %s\nPlease inform the user and try a different approach.\n",
-					item.Name, buildReplaceMessage(matchResult))
 				allowedOutput = append(allowedOutput, openAIResponsesOutputItem{
 					Type: "message",
 					ID:   item.ID,
 					Content: []openAIResponsesContent{
-						{Type: "output_text", Text: msg},
+						{Type: "output_text", Text: message.FormatReplaceInline(item.Name, matchResult)},
 					},
 				})
 			}
@@ -277,11 +269,10 @@ func (i *Interceptor) InterceptOpenAIResponsesResponse(responseBody []byte, trac
 
 	// Inject warning in remove mode
 	if result.HasBlockedCalls && !useReplaceMode {
-		warningContent := BuildWarningContent(result.BlockedToolCalls)
 		allowedOutput = append(allowedOutput, openAIResponsesOutputItem{
 			Type: "message",
 			Content: []openAIResponsesContent{
-				{Type: "output_text", Text: warningContent},
+				{Type: "output_text", Text: message.FormatRemoveWarning(toBlockedCalls(result.BlockedToolCalls))},
 			},
 		})
 		modified = true
@@ -368,37 +359,21 @@ func (i *Interceptor) evaluateToolCall(
 }
 
 // BuildWarningContent builds a warning message listing blocked tool calls.
+// Delegates to message.FormatRemoveWarning for centralized formatting.
 func BuildWarningContent(blockedCalls []BlockedToolCall) string {
-	warning := "[Crust] The following tool calls were blocked:\n"
-	var sb strings.Builder
-	for _, bc := range blockedCalls {
-		sb.WriteString("- " + bc.ToolCall.Name)
-		if bc.MatchResult.Message != "" {
-			sb.WriteString(": " + bc.MatchResult.Message)
+	return message.FormatRemoveWarning(toBlockedCalls(blockedCalls))
+}
+
+// toBlockedCalls converts []BlockedToolCall to []message.BlockedCall.
+func toBlockedCalls(blockedCalls []BlockedToolCall) []message.BlockedCall {
+	out := make([]message.BlockedCall, len(blockedCalls))
+	for i, bc := range blockedCalls {
+		out[i] = message.BlockedCall{
+			ToolName:    bc.ToolCall.Name,
+			MatchResult: bc.MatchResult,
 		}
-		sb.WriteString("\n")
 	}
-	warning += sb.String()
-	return warning
-}
-
-// buildReplaceMessage creates the message for replaced tool calls
-func buildReplaceMessage(matchResult rules.MatchResult) string {
-	if matchResult.Message != "" {
-		return matchResult.Message + " (rule: " + matchResult.RuleName + ")"
-	}
-	return "blocked by rule: " + matchResult.RuleName
-}
-
-// buildReplaceWarning creates a friendly warning for replace mode
-func buildReplaceWarning(blockedCalls []BlockedToolCall) string {
-	warning := "[Crust] The following tool calls were blocked. Please try a different approach:\n"
-	var sb strings.Builder
-	for _, bc := range blockedCalls {
-		fmt.Fprintf(&sb, "- %s: %s\n", bc.ToolCall.Name, buildReplaceMessage(bc.MatchResult))
-	}
-	warning += sb.String()
-	return warning
+	return out
 }
 
 // OpenAI response structures

@@ -125,7 +125,7 @@ type TelemetryConfig struct {
 type SecurityConfig struct {
 	Enabled         bool            `yaml:"enabled"`           // enable security interception (uses rules engine)
 	BufferStreaming bool            `yaml:"buffer_streaming"`  // enable response buffering for streaming requests
-	MaxBufferEvents int             `yaml:"max_buffer_events"` // maximum number of SSE events to buffer (default: 1000)
+	MaxBufferEvents int             `yaml:"max_buffer_events"` // maximum number of SSE events to buffer (default: 5000)
 	BufferTimeout   int             `yaml:"buffer_timeout"`    // buffer timeout in seconds (default: 60)
 	BlockMode       types.BlockMode `yaml:"block_mode"`        // "remove" (default) or "replace" (substitute with echo command)
 }
@@ -161,7 +161,7 @@ func (c *SecurityConfig) Validate() error {
 type RulesConfig struct {
 	Enabled        bool   `yaml:"enabled"`
 	UserDir        string `yaml:"user_dir"`        // directory for user rules (default: ~/.crust/rules.d)
-	DisableBuiltin bool   `yaml:"disable_builtin"` // disable embedded builtin rules
+	DisableBuiltin bool   `yaml:"disable_builtin"` // disable embedded builtin rules (locked rules remain active)
 	Watch          bool   `yaml:"watch"`           // enable file watching for hot reload
 }
 
@@ -208,8 +208,8 @@ func DefaultConfig() *Config {
 		Security: SecurityConfig{
 			Enabled:         true,
 			BufferStreaming: true, // enabled by default for security
-			MaxBufferEvents: 1000,
-			BufferTimeout:   60,
+			MaxBufferEvents: 5000,
+			BufferTimeout:   120,
 			BlockMode:       types.BlockModeRemove,
 		},
 		Rules: RulesConfig{

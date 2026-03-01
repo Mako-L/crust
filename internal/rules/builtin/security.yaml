@@ -6,7 +6,7 @@ rules:
     block: ["**/.env", "**/.env.*"]
     except: ["**/.env.example", "**/.env.template"]
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access .env files - may contain secrets"
+    message: "Blocked: .env files contain secrets (API keys, passwords). Ask the user to provide values instead."
     severity: critical
 
   - name: protect-ssh-keys
@@ -17,7 +17,7 @@ rules:
     except:
       - "$HOME/.ssh/id_*.pub"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access SSH private keys or config"
+    message: "Blocked: SSH private keys are authentication credentials."
     severity: critical
 
   # ===========================================================================
@@ -32,7 +32,7 @@ rules:
       - "/etc/sudoers"
       - "/etc/sudoers.d/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access system authentication files"
+    message: "Blocked: system authentication files contain credentials (/etc/shadow, /etc/sudoers)."
     severity: critical
 
   # ===========================================================================
@@ -44,7 +44,7 @@ rules:
       - "**/.crust/**"
       - "**/crust*.db"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access Crust data"
+    message: "Blocked: Crust internal data is protected from tampering."
     severity: critical
 
   # ===========================================================================
@@ -66,7 +66,7 @@ rules:
       # Fish stores history in XDG data dir, not dotfile
       - "$HOME/.local/share/fish/fish_history"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access shell history files"
+    message: "Blocked: shell history may contain passwords and tokens typed on the command line."
     severity: high
 
   # ===========================================================================
@@ -91,7 +91,7 @@ rules:
       - "**/terraform.tfstate"
       - "**/terraform.tfstate.backup"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access cloud credentials"
+    message: "Blocked: cloud credential files contain authentication secrets. Use environment variables instead."
     severity: critical
 
   # ===========================================================================
@@ -106,7 +106,7 @@ rules:
       - "$HOME/.gnupg/random_seed"
     # No except needed — block list targets only private key material
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access GPG private keys"
+    message: "Blocked: GPG private keys are cryptographic credentials."
     severity: critical
 
   # ===========================================================================
@@ -152,7 +152,7 @@ rules:
       - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Login Data"
       - "$HOME/AppData/Local/BraveSoftware/Brave-Browser/User Data/**/Cookies"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access browser sensitive data"
+    message: "Blocked: browser data contains saved passwords, cookies, and session tokens."
     severity: high
 
   # ===========================================================================
@@ -167,7 +167,7 @@ rules:
       - "$HOME/.netrc"
       - "$HOME/_netrc"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access git/network credentials"
+    message: "Blocked: git credential files (.git-credentials, .netrc) contain plaintext auth tokens."
     severity: critical
 
   # ===========================================================================
@@ -198,7 +198,7 @@ rules:
       - "$HOME/.m2/settings.xml"
       - "$HOME/.m2/settings-security.xml"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access package manager tokens"
+    message: "Blocked: package manager configs (.npmrc, .pypirc) may contain registry auth tokens."
     severity: high
 
   # ===========================================================================
@@ -217,7 +217,7 @@ rules:
       - "$HOME/.config/fish/config.fish"
       - "$HOME/.config/fish/conf.d/**"
     actions: [write, delete]
-    message: "Cannot modify shell startup files - persistence vector"
+    message: "Blocked: modifying shell startup files is a persistence attack vector."
     severity: critical
 
   # ===========================================================================
@@ -230,7 +230,7 @@ rules:
       - "$HOME/.ssh/authorized_keys2"
       - "$HOME/.ssh/known_hosts"
     actions: [write, delete]
-    message: "Cannot modify SSH authorized keys or known hosts - persistence vector"
+    message: "Blocked: modifying authorized_keys enables unauthorized remote access."
     severity: critical
 
   # ===========================================================================
@@ -326,7 +326,7 @@ rules:
       - "$HOME/.config/Notion/**"
       - "$HOME/AppData/Roaming/Notion/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access desktop app data - may contain session tokens"
+    message: "Blocked: desktop app data contains session tokens (Discord, Slack, Telegram, etc.)."
     severity: critical
 
   # ===========================================================================
@@ -343,7 +343,7 @@ rules:
       # KDE Wallet
       - "$HOME/.local/share/kwalletd/**"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access OS keychain/secret store - contains all saved passwords"
+    message: "Blocked: OS keychain contains all saved passwords and credentials."
     severity: critical
 
   # ===========================================================================
@@ -354,7 +354,7 @@ rules:
       - "$HOME/.config/gh/hosts.yml"
       - "$HOME/AppData/Roaming/GitHub CLI/hosts.yml"
     actions: [read, write, delete, copy, move, network]
-    message: "Cannot access GitHub CLI credentials"
+    message: "Blocked: GitHub CLI hosts.yml contains OAuth tokens. Use `gh` CLI or env vars instead."
     severity: critical
 
   # ===========================================================================
@@ -364,7 +364,7 @@ rules:
     match:
       content: "re:-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
     actions: [write]
-    message: "Cannot write private key content - potential key exfiltration"
+    message: "Blocked: writing private key material is a potential exfiltration vector."
     severity: critical
 
   # ===========================================================================
@@ -374,7 +374,7 @@ rules:
     match:
       command: "re:\\beval\\b|\\bexec\\b"
     actions: [execute]
-    message: "eval/exec prevents static security analysis. Use direct commands instead."
+    message: "Blocked: eval/exec prevents static security analysis. Use direct commands instead."
     severity: high
 
   # ===========================================================================
@@ -404,7 +404,7 @@ rules:
       - "/etc/zsh/**"
       - "/etc/zshrc"
     actions: [write, delete]
-    message: "Cannot modify system configuration files"
+    message: "Blocked: system config files (/etc/hosts, /etc/ssh, PAM) control OS security."
     severity: critical
 
   # ===========================================================================
@@ -444,7 +444,7 @@ rules:
       - "$HOME/.config/autostart/**"
       - "/etc/xdg/autostart/**"
     actions: [write, delete]
-    message: "Cannot modify scheduled tasks or startup entries — persistence vector"
+    message: "Blocked: cron/launchd/systemd entries are persistence vectors — malware uses these to survive reboot."
     severity: critical
 
   # ===========================================================================
@@ -458,7 +458,7 @@ rules:
     match:
       command: "re:/dev/tcp/|/dev/udp/|\\bnc\\b.*\\s-e\\s|\\bncat\\b.*(\\s-e\\s|\\s--exec\\s|\\s--sh-exec\\s)|\\bsocat\\b.*\\bexec\\b"
     actions: [execute, read, network]
-    message: "Blocked reverse shell pattern"
+    message: "Blocked: reverse shell pattern detected (/dev/tcp, nc -e, socat exec)."
     severity: critical
 
   # ===========================================================================
@@ -471,5 +471,5 @@ rules:
     match:
       host: "re:^169\\.254\\.169\\.254$|^metadata\\.google\\.internal$|^100\\.100\\.100\\.200$|^fd00:ec2::254$"
     actions: [read, write, network]
-    message: "Cannot access cloud instance metadata — SSRF risk"
+    message: "Blocked: cloud metadata endpoint exposes IAM credentials — SSRF attack vector."
     severity: critical

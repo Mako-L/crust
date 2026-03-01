@@ -23,6 +23,7 @@ import (
 
 	"github.com/BakeLens/crust/internal/config"
 	"github.com/BakeLens/crust/internal/logger"
+	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
 	"github.com/BakeLens/crust/internal/telemetry"
@@ -229,11 +230,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					WasBlocked: true,
 					RuleName:   result.RuleName,
 				})
-				msg := "[Crust] Request blocked: " + result.Message
-				if result.Message == "" {
-					msg = "[Crust] Request blocked by rule: " + result.RuleName
-				}
-				http.Error(w, msg, http.StatusForbidden)
+				http.Error(w, message.FormatHTTPBlock(result), http.StatusForbidden)
 				return
 			}
 		}

@@ -3,10 +3,10 @@ package jsonrpc
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 
 	"github.com/BakeLens/crust/internal/logger"
+	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 )
 
@@ -67,7 +67,7 @@ func scanDLP(log *logger.Logger, engine *rules.Engine, data json.RawMessage,
 		protocol, logLabel, dlpResult.RuleName, dlpResult.Message)
 	if len(id) > 0 {
 		SendBlockError(log, errWriter, id,
-			fmt.Sprintf("[Crust] Blocked by rule %q: %s", dlpResult.RuleName, dlpResult.Message))
+			message.FormatDLPBlock(dlpResult.RuleName, dlpResult.Message))
 	}
 	return true
 }
@@ -125,7 +125,7 @@ func processMessage(log *logger.Logger, engine *rules.Engine, line []byte, msg *
 			protocol, msg.Method, toolCall.Name, result.RuleName, result.Message)
 		if msg.IsRequest() {
 			SendBlockError(log, errWriter, msg.ID,
-				fmt.Sprintf("[Crust] Blocked by rule %q: %s", result.RuleName, result.Message))
+				message.FormatJSONRPCBlock(result.RuleName, result.Message))
 		}
 		return resultBlocked
 	}

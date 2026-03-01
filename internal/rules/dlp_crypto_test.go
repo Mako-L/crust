@@ -248,12 +248,15 @@ func TestCryptoWalletPaths(t *testing.T) {
 
 func TestCryptoWalletPathsOSSpecific(t *testing.T) {
 	// Verify paths follow OS conventions via btcutil.AppDataDir.
+	// On case-insensitive filesystems (default macOS APFS), paths are lowercased
+	// at init time via pathutil.DefaultFS().Lower().
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS: ~/Library/Application Support/Bitcoin
+		// macOS: ~/Library/Application Support/Bitcoin (lowercased on case-insensitive APFS)
 		found := false
 		for _, dir := range cryptoWalletDirs {
-			if strings.Contains(dir, "Library/Application Support") && strings.Contains(dir, "itcoin") {
+			lower := strings.ToLower(dir)
+			if strings.Contains(lower, "library/application support") && strings.Contains(lower, "itcoin") {
 				found = true
 				break
 			}

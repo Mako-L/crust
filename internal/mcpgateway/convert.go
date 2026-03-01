@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/BakeLens/crust/internal/rules"
 )
 
@@ -94,7 +95,7 @@ func MCPMethodToToolCall(method string, params json.RawMessage) (*rules.ToolCall
 		// Valid URL schemes are always ≥2 chars (RFC 3986), so a single-letter
 		// scheme is always a Windows drive letter.
 		isFilePath := parsed.Scheme == "file" || parsed.Scheme == ""
-		if !isFilePath && len(parsed.Scheme) == 1 {
+		if !isFilePath && len(parsed.Scheme) == 1 && pathutil.IsDriverLetter(parsed.Scheme[0]) {
 			isFilePath = true
 		}
 
@@ -110,10 +111,8 @@ func MCPMethodToToolCall(method string, params json.RawMessage) (*rules.ToolCall
 					path = p.URI
 				}
 				// file:///C:/Users/... → parsed.Path="/C:/Users/..."
-				// Strip leading "/" before a Windows drive letter (X:).
-				if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
-					path = path[1:]
-				}
+				// Strip leading "/" before a Windows drive letter.
+				path = pathutil.StripFileURIDriveLetter(path)
 			}
 			args, err := json.Marshal(map[string]string{"path": path})
 			if err != nil {

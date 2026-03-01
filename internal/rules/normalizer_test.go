@@ -2,6 +2,8 @@ package rules
 
 import (
 	"testing"
+
+	"github.com/BakeLens/crust/internal/pathutil"
 )
 
 func TestNormalizer_Normalize(t *testing.T) {
@@ -414,9 +416,11 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 			expected: "/a/ab",
 		},
 		{
-			name:     "braced var allows adjacent text",
-			input:    "${A}B",
-			expected: "/aB",
+			name:  "braced var allows adjacent text",
+			input: "${A}B",
+			// On case-insensitive filesystems (macOS APFS), the normalizer
+			// lowercases the entire path, so "/aB" becomes "/ab".
+			expected: pathutil.DefaultFS().Lower("/aB"),
 		},
 	}
 

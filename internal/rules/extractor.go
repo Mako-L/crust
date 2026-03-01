@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -1053,11 +1054,11 @@ func decodePowerShellEncodedCommand(encoded string) (string, bool) {
 
 // unquotedAbsPathRe matches unquoted absolute paths (Unix or Windows drive letter).
 // Used as fallback when the bash parser can't handle PowerShell inner commands.
-var unquotedAbsPathRe = regexp.MustCompile(`(?:/[a-zA-Z0-9_.~/-]+|[A-Z]:[/\\][a-zA-Z0-9_.~\\/:-]+)`)
+var unquotedAbsPathRe = regexp.MustCompile(`(?:/[a-zA-Z0-9_.~/-]+|[A-Za-z]:[/\\][a-zA-Z0-9_.~\\/:-]+)`)
 
 // winBackslashPathRe matches Windows drive-letter paths and UNC paths with backslashes.
 // Examples: C:\Users\user\.env, \\server\share\.env
-var winBackslashPathRe = regexp.MustCompile(`(?:[A-Z]:\\|\\\\)(?:[a-zA-Z0-9_.~-]+\\)*[a-zA-Z0-9_.~*-]+`)
+var winBackslashPathRe = regexp.MustCompile(`(?:[A-Za-z]:\\|\\\\)(?:[a-zA-Z0-9_.~-]+\\)*[a-zA-Z0-9_.~*-]+`)
 
 // psVarAssignRe matches PowerShell-style variable assignments: $varName = "value" or $varName = value
 var psVarAssignRe = regexp.MustCompile(`\$([a-zA-Z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s;|]+))`)
@@ -1594,9 +1595,12 @@ var wrapperFlagsWithValue = map[string]map[string]bool{
 // and its arguments. Handles flags, flag-values, and wrappers with leading
 // value arguments (e.g., timeout DURATION COMMAND).
 func (e *Extractor) resolveCommand(name string, args []string) (string, []string) {
-	// Strip path prefix (e.g., /usr/bin/cat → cat)
+	// Strip path prefix (e.g., /usr/bin/cat → cat, C:\Windows\cmd.exe → cmd.exe)
 	cmdName := name
 	if idx := strings.LastIndex(cmdName, "/"); idx != -1 {
+		cmdName = cmdName[idx+1:]
+	}
+	if idx := strings.LastIndex(cmdName, `\`); idx != -1 {
 		cmdName = cmdName[idx+1:]
 	}
 
@@ -2027,7 +2031,9 @@ func extractPathFromFileURL(rawURL string) string {
 		return ""
 	}
 	if strings.EqualFold(u.Scheme, "file") && u.Path != "" {
-		return path.Clean(u.Path) // normalize // and .. in file: paths
+		// normalize // and .. in file: paths, then strip leading "/"
+		// before Windows drive letters (e.g., "/C:/Users" → "C:/Users").
+		return pathutil.StripFileURIDriveLetter(path.Clean(u.Path))
 	}
 	return ""
 }

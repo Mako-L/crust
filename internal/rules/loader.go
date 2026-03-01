@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/fileutil"
+	"github.com/BakeLens/crust/internal/pathutil"
 	"golang.org/x/crypto/sha3"
 	"gopkg.in/yaml.v3"
 )
@@ -297,9 +298,10 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 		return "", fmt.Errorf("failed to resolve user dir: %w", err)
 	}
 
-	// Ensure the path is within the user directory
-	// Add trailing separator to prevent prefix matching issues (e.g., /rules vs /rules-backup)
-	if !strings.HasPrefix(absPath, absUserDir+string(os.PathSeparator)) && absPath != absUserDir {
+	// Ensure the path is within the user directory.
+	// HasPathPrefix handles trailing separator to prevent prefix issues
+	// (e.g., /rules vs /rules-backup).
+	if !pathutil.HasPathPrefix(absPath, absUserDir) {
 		return "", fmt.Errorf("path traversal detected: %s is outside %s", absPath, absUserDir)
 	}
 
@@ -311,7 +313,7 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to resolve symlink: %w", err)
 			}
-			if !strings.HasPrefix(absRealPath, absUserDir+string(os.PathSeparator)) && absRealPath != absUserDir {
+			if !pathutil.HasPathPrefix(absRealPath, absUserDir) {
 				return "", errors.New("symlink points outside rules directory")
 			}
 		}

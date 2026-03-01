@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/BakeLens/crust/internal/logger"
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/gobwas/glob"
 )
 
@@ -25,7 +26,7 @@ func expandRuleHomes(rules []Rule, homeDir string) []Rule {
 	if homeDir == "" {
 		return rules
 	}
-	home := filepath.ToSlash(homeDir)
+	home := pathutil.ToSlash(homeDir)
 	for i := range rules {
 		for j, p := range rules[i].Block.Paths {
 			rules[i].Block.Paths[j] = strings.ReplaceAll(p, "$HOME", home)
@@ -1244,6 +1245,7 @@ func (e *Engine) incrementHitCount(name string) {
 // If a glob matches no files, the path is dropped — there's nothing to protect.
 // Non-glob paths pass through unchanged.
 func expandFileGlobs(paths []string) []string {
+	fs := pathutil.DefaultFS()
 	result := make([]string, 0, len(paths))
 	for _, p := range paths {
 		if !containsGlob(p) {
@@ -1254,7 +1256,13 @@ func expandFileGlobs(paths []string) []string {
 		if err != nil || len(matches) == 0 {
 			continue
 		}
-		result = append(result, matches...)
+		// SECURITY: filepath.Glob returns canonical casing from the filesystem.
+		// On case-insensitive APFS, a lowered glob like "/users/cyy/.e*" may
+		// return "/users/cyy/.Env" (canonical case). Re-lower to match
+		// the normalizer's lowering and prevent case-based pattern bypasses.
+		for _, m := range matches {
+			result = append(result, fs.Lower(pathutil.ToSlash(m)))
+		}
 	}
 	return result
 }

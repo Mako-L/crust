@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/pathutil"
 )
 
 func TestMatcherNew(t *testing.T) {
@@ -612,6 +614,131 @@ func TestContainsGlob(t *testing.T) {
 				t.Errorf("containsGlob(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestMatcher_CaseInsensitiveMatching verifies that on case-insensitive
+// filesystems (macOS APFS, Windows NTFS), patterns and paths are lowercased
+// before matching. This is security-critical: without this, an attacker could
+// bypass rules by using different casing (e.g., ".ENV" vs ".env").
+func TestMatcher_CaseInsensitiveMatching(t *testing.T) {
+	fs := pathutil.DefaultFS()
+	if fs.CaseSensitive {
+		t.Skip("skipping case-insensitive test on case-sensitive filesystem")
+	}
+
+	tests := []struct {
+		name     string
+		patterns []string
+		excepts  []string
+		path     string
+		want     bool
+	}{
+		{
+			name:     "uppercase pattern matches lowercase path",
+			patterns: []string{"**/.ENV"},
+			path:     "/home/user/.env",
+			want:     true,
+		},
+		{
+			name:     "lowercase pattern matches uppercase path",
+			patterns: []string{"**/.env"},
+			path:     "/HOME/USER/.ENV",
+			want:     true,
+		},
+		{
+			name:     "mixed case pattern matches mixed case path",
+			patterns: []string{"**/Library/Application Support/**"},
+			path:     "/users/cyy/library/application support/bitcoin/wallet.dat",
+			want:     true,
+		},
+		{
+			name:     "SSH key pattern case-insensitive",
+			patterns: []string{"**/.ssh/id_*"},
+			path:     "/Users/Admin/.SSH/id_RSA",
+			want:     true,
+		},
+		{
+			name:     "except pattern case-insensitive",
+			patterns: []string{"**/.env"},
+			excepts:  []string{"**/TEST/**"},
+			path:     "/project/test/.env",
+			want:     false,
+		},
+		{
+			name:     "Chrome Login Data mixed case",
+			patterns: []string{"**/.config/google-chrome/*/Login Data"},
+			path:     "/home/user/.config/google-chrome/Default/Login Data",
+			want:     true,
+		},
+		{
+			name:     "Windows drive letter path case-insensitive",
+			patterns: []string{"c:/users/**/.ssh/id_*"},
+			path:     "C:/Users/Admin/.ssh/id_rsa",
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := NewMatcher(tt.patterns, tt.excepts)
+			if err != nil {
+				t.Fatalf("NewMatcher() error = %v", err)
+			}
+			got := m.Match(tt.path)
+			if got != tt.want {
+				t.Errorf("Match(%q) = %v, want %v (case-insensitive FS)", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMatcher_CaseSensitiveMatching verifies that on case-sensitive
+// filesystems (Linux ext4), case differences prevent matching.
+func TestMatcher_CaseSensitiveMatching(t *testing.T) {
+	fs := pathutil.DefaultFS()
+	if !fs.CaseSensitive {
+		t.Skip("skipping case-sensitive test on case-insensitive filesystem")
+	}
+
+	m, err := NewMatcher([]string{"**/.env"}, nil)
+	if err != nil {
+		t.Fatalf("NewMatcher() error = %v", err)
+	}
+
+	// On case-sensitive FS, ".ENV" should NOT match ".env" pattern
+	if m.Match("/home/user/.ENV") {
+		t.Error("Match(\".ENV\") = true on case-sensitive FS, want false")
+	}
+	// But ".env" should still match
+	if !m.Match("/home/user/.env") {
+		t.Error("Match(\".env\") = false on case-sensitive FS, want true")
+	}
+}
+
+// TestMatcher_PatternLowercasedOnCompilation verifies that NewMatcher
+// lowercases patterns on case-insensitive filesystems, so pattern
+// compilation matches the lowercasing applied to paths in Match().
+func TestMatcher_PatternLowercasedOnCompilation(t *testing.T) {
+	fs := pathutil.DefaultFS()
+	if fs.CaseSensitive {
+		t.Skip("skipping on case-sensitive filesystem")
+	}
+
+	// Pattern with mixed case should match lowercase path
+	m, err := NewMatcher(
+		[]string{"/Users/Admin/.SSH/id_*"},
+		[]string{"/Users/Admin/.SSH/id_*.PUB"},
+	)
+	if err != nil {
+		t.Fatalf("NewMatcher() error = %v", err)
+	}
+
+	if !m.Match("/users/admin/.ssh/id_rsa") {
+		t.Error("expected mixed-case pattern to match lowercase path on case-insensitive FS")
+	}
+	if m.Match("/users/admin/.ssh/id_rsa.pub") {
+		t.Error("expected mixed-case except to exclude lowercase path on case-insensitive FS")
 	}
 }
 

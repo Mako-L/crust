@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/BakeLens/crust/internal/jsonrpc"
 	"github.com/BakeLens/crust/internal/rules"
@@ -39,7 +40,9 @@ func NewHTTPGateway(upstreamURL string, engine *rules.Engine) (*HTTPGateway, err
 	return &HTTPGateway{
 		upstream: u,
 		engine:   engine,
-		client:   &http.Client{},
+		client: &http.Client{
+			Timeout: 5 * time.Minute,
+		},
 		sessions: NewSessionStore(),
 	}, nil
 }

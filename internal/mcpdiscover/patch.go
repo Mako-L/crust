@@ -2,6 +2,7 @@ package mcpdiscover
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -114,7 +115,10 @@ func patchConfigFile(path string, client clientDef, crustBin string) (int, error
 
 	// Create whole-file backup (only if none exists yet).
 	backupPath := path + mcpBackupSuffix
-	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(backupPath); statErr != nil {
+		if !os.IsNotExist(statErr) {
+			return 0, fmt.Errorf("cannot check backup %s: %w", backupPath, statErr)
+		}
 		if err := fileutil.SecureWriteFile(backupPath, origData); err != nil {
 			return 0, err
 		}

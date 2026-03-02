@@ -927,34 +927,38 @@ type proxyRunConfig struct {
 	run   func(engine *rules.Engine, cmd []string) int
 }
 
-// runProxyCommand implements the shared flag parsing, config loading, engine
-// init, and subprocess launch for all proxy subcommands (acp-wrap, mcp gateway, wrap).
-func runProxyCommand(pcfg proxyRunConfig, args []string) {
-	fs := flag.NewFlagSet(pcfg.name, flag.ExitOnError)
-	configPath := fs.String("config", config.DefaultConfigPath(), "Path to configuration file")
-	logLevel := fs.String("log-level", "warn", "Log level: trace, debug, info, warn, error")
-	rulesDir := fs.String("rules-dir", "", "Override rules directory")
-	disableBuiltin := fs.Bool("disable-builtin", false, "Disable builtin security rules (locked rules remain active)")
-	_ = fs.Parse(args)
+// commonFlags registers the shared --config, --log-level, --rules-dir, and
+// --disable-builtin flags on the given FlagSet.
+type commonFlags struct {
+	configPath     *string
+	logLevel       *string
+	rulesDir       *string
+	disableBuiltin *bool
+}
 
-	subCmd := fs.Args()
-	if len(subCmd) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: crust %s\n", pcfg.usage)
-		os.Exit(1)
+func registerCommonFlags(fs *flag.FlagSet) commonFlags {
+	return commonFlags{
+		configPath:     fs.String("config", config.DefaultConfigPath(), "Path to configuration file"),
+		logLevel:       fs.String("log-level", "warn", "Log level: trace, debug, info, warn, error"),
+		rulesDir:       fs.String("rules-dir", "", "Override rules directory"),
+		disableBuiltin: fs.Bool("disable-builtin", false, "Disable builtin security rules (locked rules remain active)"),
 	}
+}
 
-	// Logger to stderr only — stdout is the JSON-RPC pipe
+// loadEngine sets up logging, loads config, and creates a rules engine.
+// Used by all proxy subcommands (acp-wrap, mcp gateway, mcp http, wrap).
+func loadEngine(name string, cf commonFlags, subprocessIsolation bool) *rules.Engine {
 	logger.SetColored(false)
-	if *logLevel != "" {
-		logger.SetGlobalLevelFromString(*logLevel)
+	if *cf.logLevel != "" {
+		logger.SetGlobalLevelFromString(*cf.logLevel)
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(*cf.configPath)
 	if err != nil {
 		cfg = config.DefaultConfig()
 	}
 
-	dir := *rulesDir
+	dir := *cf.rulesDir
 	if dir == "" {
 		dir = cfg.Rules.UserDir
 	}
@@ -963,20 +967,36 @@ func runProxyCommand(pcfg proxyRunConfig, args []string) {
 	}
 
 	if err := fileutil.SecureMkdirAll(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "crust %s: failed to create rules dir: %v\n", pcfg.name, err)
+		fmt.Fprintf(os.Stderr, "crust %s: failed to create rules dir: %v\n", name, err)
 		os.Exit(1)
 	}
 
 	engine, err := rules.NewEngine(rules.EngineConfig{
 		UserRulesDir:        dir,
-		DisableBuiltin:      *disableBuiltin || cfg.Rules.DisableBuiltin,
-		SubprocessIsolation: true,
+		DisableBuiltin:      *cf.disableBuiltin || cfg.Rules.DisableBuiltin,
+		SubprocessIsolation: subprocessIsolation,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", pcfg.name, err)
+		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", name, err)
+		os.Exit(1)
+	}
+	return engine
+}
+
+// runProxyCommand implements the shared flag parsing, config loading, engine
+// init, and subprocess launch for all proxy subcommands (acp-wrap, mcp gateway, wrap).
+func runProxyCommand(pcfg proxyRunConfig, args []string) {
+	fs := flag.NewFlagSet(pcfg.name, flag.ExitOnError)
+	cf := registerCommonFlags(fs)
+	_ = fs.Parse(args)
+
+	subCmd := fs.Args()
+	if len(subCmd) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: crust %s\n", pcfg.usage)
 		os.Exit(1)
 	}
 
+	engine := loadEngine(pcfg.name, cf, true)
 	os.Exit(pcfg.run(engine, subCmd))
 }
 
@@ -1029,10 +1049,7 @@ func runMcpHTTP(args []string) {
 	fs := flag.NewFlagSet("mcp http", flag.ExitOnError)
 	upstream := fs.String("upstream", "", "Upstream MCP server URL (required)")
 	listen := fs.String("listen", "127.0.0.1:9091", "Local listen address")
-	configPath := fs.String("config", config.DefaultConfigPath(), "Path to configuration file")
-	logLevel := fs.String("log-level", "warn", "Log level: trace, debug, info, warn, error")
-	rulesDir := fs.String("rules-dir", "", "Override rules directory")
-	disableBuiltin := fs.Bool("disable-builtin", false, "Disable builtin security rules (locked rules remain active)")
+	cf := registerCommonFlags(fs)
 	_ = fs.Parse(args)
 
 	if *upstream == "" {
@@ -1041,38 +1058,7 @@ func runMcpHTTP(args []string) {
 		os.Exit(1)
 	}
 
-	// Logger to stderr only
-	logger.SetColored(false)
-	if *logLevel != "" {
-		logger.SetGlobalLevelFromString(*logLevel)
-	}
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		cfg = config.DefaultConfig()
-	}
-
-	dir := *rulesDir
-	if dir == "" {
-		dir = cfg.Rules.UserDir
-	}
-	if dir == "" {
-		dir = rules.DefaultUserRulesDir()
-	}
-
-	if err := fileutil.SecureMkdirAll(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "crust mcp http: failed to create rules dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	engine, err := rules.NewEngine(rules.EngineConfig{
-		UserRulesDir:   dir,
-		DisableBuiltin: *disableBuiltin || cfg.Rules.DisableBuiltin,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "crust mcp http: failed to init rules: %v\n", err)
-		os.Exit(1)
-	}
+	engine := loadEngine("mcp http", cf, false)
 
 	gw, err := mcpgateway.NewHTTPGateway(*upstream, engine)
 	if err != nil {

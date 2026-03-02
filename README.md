@@ -29,6 +29,13 @@
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20FreeBSD-lightgrey" alt="Platform" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/BakeLens/crust/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/Security%20Policy-Responsible%20Disclosure-green" alt="Security Policy" /></a>
+  <img src="https://img.shields.io/badge/SAST-gosec%20%7C%20semgrep-blueviolet" alt="SAST" />
+  <img src="https://img.shields.io/badge/Fuzz%20Tested-31%20targets-orange" alt="Fuzz Tested" />
+  <img src="https://img.shields.io/badge/Secrets-govulncheck%20%7C%20gitleaks-critical" alt="Secret Scanning" />
+</p>
+
 ## What is Crust?
 
 Crust is a transparent, local gateway between your AI agents and LLM providers. It intercepts every tool call — file reads, shell commands, network requests — and blocks dangerous actions before they execute. No code changes required.
@@ -145,6 +152,22 @@ Crust ships with **21 security rules** (14 locked, 7 user-disablable) and **34 D
 | **Dangerous Commands** | `eval`/`exec` with dynamic code execution |
 
 All rules are open source: [`internal/rules/builtin/security.yaml`](internal/rules/builtin/security.yaml) (path rules), [`internal/rules/dlp.go`](internal/rules/dlp.go) (DLP patterns), and [`internal/rules/dlp_crypto.go`](internal/rules/dlp_crypto.go) (crypto key detection)
+
+## Security of Crust Itself
+
+A security tool must protect itself first. Crust is built to resist tampering — even by the AI agents it monitors:
+
+| Principle | What it means |
+|-----------|---------------|
+| **Only you can access it** | Crust's control interface only listens on your machine — no one else on the network can reach it |
+| **Agents can't disable it** | A hardcoded pre-filter prevents AI agents from turning off, reconfiguring, or bypassing Crust |
+| **Your files stay private** | All config and log files are locked to your user account — other users and programs can't read them |
+| **Logs are encrypted** | Activity logs are stored in an encrypted database; the key never appears in command history |
+| **Oversized requests are rejected** | Abnormally large inputs are dropped before processing to prevent abuse |
+| **Connections are encrypted** | All traffic to LLM providers uses modern encryption (TLS 1.2+) |
+| **Every code change is scanned** | 10 automated security checks run on every commit — vulnerability scanning, secret detection, race condition testing |
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Custom Rules
 

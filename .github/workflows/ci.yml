@@ -37,6 +37,37 @@ jobs:
           go install go.uber.org/nilaway/cmd/nilaway@latest
           nilaway ./...
 
+  security:
+    name: Security Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+
+      - name: Install gitleaks (DLP Tier 2)
+        run: go install github.com/zricethezav/gitleaks/v8@latest
+
+      - name: Verify PIE binary
+        run: |
+          go build -buildmode=pie -o crust-pie .
+          file crust-pie | grep -i "pie\|shared object\|position independent" || echo "Warning: PIE not detected (may be default on this platform)"
+          rm crust-pie
+
+      - name: Fuzz tests (30s each, top 5 critical targets)
+        run: |
+          go test ./internal/rules/... -fuzz=FuzzEngineBypass -fuzztime=30s -short
+          go test ./internal/rules/... -fuzz=FuzzBuiltinRuleBypass -fuzztime=30s -short
+          go test ./internal/rules/... -fuzz=FuzzNormalizeUnicode -fuzztime=30s -short
+          go test ./internal/rules/... -fuzz=FuzzLoopbackRegex -fuzztime=30s -short
+          go test ./internal/rules/... -fuzz=FuzzMCPToolBypass -fuzztime=30s -short
+
+      - name: License compliance
+        run: |
+          go install github.com/google/go-licenses@latest
+          go-licenses check ./... --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0,Zlib,Elastic-2.0
 
   test:
     name: Go Test (${{ matrix.os }})

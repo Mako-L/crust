@@ -1124,8 +1124,12 @@ func runMCPDiscover(args []string) {
 	}
 
 	if *restore {
-		mcpdiscover.RestoreAll()
-		tui.PrintSuccess("MCP configs restored from backups")
+		n := mcpdiscover.RestoreAll()
+		if n > 0 {
+			tui.PrintSuccess(fmt.Sprintf("Restored %d MCP config(s) from backups", n))
+		} else {
+			tui.PrintWarning("No MCP config backups found to restore")
+		}
 		return
 	}
 

@@ -91,8 +91,15 @@ jobs:
       - name: Build (notui)
         run: go build -tags notui ./...
 
-      - name: Unit tests (with race detector)
-        run: go test -race ./... -short
+      - name: Unit tests (with race detector and coverage)
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./... -short
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
 
   # macOS and FreeBSD run only on main to reduce CI costs (macOS is 10x billing).
   test-expensive:

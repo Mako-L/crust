@@ -110,7 +110,7 @@ crust stop       # Stop crust
 For [MCP](https://modelcontextprotocol.io) servers, Crust intercepts `tools/call` and `resources/read` requests before they reach the server.
 
 ```bash
-crust mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
+crust mcp gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
 ```
 
 Works with any MCP server. See the [MCP setup guide](docs/mcp.md) for details and examples.
@@ -184,7 +184,7 @@ Crust inspects tool calls at multiple layers:
 2. **Layer 1 (Response Scan)**: Scans tool calls in the LLM's response before they execute — blocks new dangerous actions in real-time.
 3. **Stdio Proxy** ([MCP](docs/mcp.md) / [ACP](docs/acp.md)): Wraps MCP servers or ACP agents as a stdio proxy, intercepting security-relevant JSON-RPC messages in both directions — including DLP scanning of server responses for leaked secrets.
 
-All modes apply a [17-step evaluation pipeline](docs/how-it-works.md) — input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path-based rules, and fallback content matching — each step in microseconds.
+All modes apply a [15-step evaluation pipeline](docs/how-it-works.md) with a self-protection pre-filter — input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path-based rules, and fallback content matching — each step in microseconds.
 
 All activity is logged locally to encrypted storage.
 

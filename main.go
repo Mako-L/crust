@@ -25,9 +25,10 @@ import (
 	"github.com/BakeLens/crust/internal/config"
 	"github.com/BakeLens/crust/internal/daemon"
 	"github.com/BakeLens/crust/internal/fileutil"
+	"github.com/BakeLens/crust/internal/httpproxy"
 	"github.com/BakeLens/crust/internal/logger"
+	"github.com/BakeLens/crust/internal/mcpdiscover"
 	"github.com/BakeLens/crust/internal/mcpgateway"
-	"github.com/BakeLens/crust/internal/proxy"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
 	"github.com/BakeLens/crust/internal/telemetry"
@@ -99,8 +100,8 @@ func main() {
 		case "acp-wrap":
 			runAcpWrap(os.Args[2:])
 			return
-		case "mcp-gateway":
-			runMcpGateway(os.Args[2:])
+		case "mcp":
+			runMCP(os.Args[2:])
 			return
 		case "wrap":
 			runWrap(os.Args[2:])
@@ -519,7 +520,7 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 	}
 
 	// Create proxy
-	proxyHandler, err := proxy.NewProxy(cfg.Upstream.URL, cfg.Upstream.APIKey, time.Duration(cfg.Upstream.Timeout)*time.Second, cfg.Upstream.Providers, autoMode)
+	proxyHandler, err := httpproxy.NewProxy(cfg.Upstream.URL, cfg.Upstream.APIKey, time.Duration(cfg.Upstream.Timeout)*time.Second, cfg.Upstream.Providers, autoMode)
 	if err != nil {
 		log.Error("Failed to create proxy: %v", err)
 		os.Exit(1)
@@ -745,6 +746,9 @@ func printUsage() {
 	fmt.Print(tui.AlignColumns([][2]string{
 		{"crust doctor [--timeout 5s] [--report]", "Check provider endpoint connectivity"},
 		{"crust acp-wrap [flags] -- <cmd...>", "ACP stdio proxy with security rules"},
+		{"crust mcp gateway [flags] -- <cmd...>", "MCP stdio proxy with security rules"},
+		{"crust mcp http --upstream <url>", "MCP HTTP reverse proxy with security rules"},
+		{"crust mcp discover [--patch] [--restore]", "Scan/patch MCP client configs"},
 		{"crust completion [--install]", "Install shell completion (bash/zsh/fish)"},
 		{"crust uninstall", "Uninstall crust completely"},
 		{"crust help", "Show this help message"},
@@ -923,34 +927,38 @@ type proxyRunConfig struct {
 	run   func(engine *rules.Engine, cmd []string) int
 }
 
-// runProxyCommand implements the shared flag parsing, config loading, engine
-// init, and subprocess launch for all proxy subcommands (acp-wrap, mcp-gateway, wrap).
-func runProxyCommand(pcfg proxyRunConfig, args []string) {
-	fs := flag.NewFlagSet(pcfg.name, flag.ExitOnError)
-	configPath := fs.String("config", config.DefaultConfigPath(), "Path to configuration file")
-	logLevel := fs.String("log-level", "warn", "Log level: trace, debug, info, warn, error")
-	rulesDir := fs.String("rules-dir", "", "Override rules directory")
-	disableBuiltin := fs.Bool("disable-builtin", false, "Disable builtin security rules (locked rules remain active)")
-	_ = fs.Parse(args)
+// commonFlags registers the shared --config, --log-level, --rules-dir, and
+// --disable-builtin flags on the given FlagSet.
+type commonFlags struct {
+	configPath     *string
+	logLevel       *string
+	rulesDir       *string
+	disableBuiltin *bool
+}
 
-	subCmd := fs.Args()
-	if len(subCmd) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: crust %s\n", pcfg.usage)
-		os.Exit(1)
+func registerCommonFlags(fs *flag.FlagSet) commonFlags {
+	return commonFlags{
+		configPath:     fs.String("config", config.DefaultConfigPath(), "Path to configuration file"),
+		logLevel:       fs.String("log-level", "warn", "Log level: trace, debug, info, warn, error"),
+		rulesDir:       fs.String("rules-dir", "", "Override rules directory"),
+		disableBuiltin: fs.Bool("disable-builtin", false, "Disable builtin security rules (locked rules remain active)"),
 	}
+}
 
-	// Logger to stderr only — stdout is the JSON-RPC pipe
+// loadEngine sets up logging, loads config, and creates a rules engine.
+// Used by all proxy subcommands (acp-wrap, mcp gateway, mcp http, wrap).
+func loadEngine(name string, cf commonFlags, subprocessIsolation bool) *rules.Engine {
 	logger.SetColored(false)
-	if *logLevel != "" {
-		logger.SetGlobalLevelFromString(*logLevel)
+	if *cf.logLevel != "" {
+		logger.SetGlobalLevelFromString(*cf.logLevel)
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(*cf.configPath)
 	if err != nil {
 		cfg = config.DefaultConfig()
 	}
 
-	dir := *rulesDir
+	dir := *cf.rulesDir
 	if dir == "" {
 		dir = cfg.Rules.UserDir
 	}
@@ -959,20 +967,36 @@ func runProxyCommand(pcfg proxyRunConfig, args []string) {
 	}
 
 	if err := fileutil.SecureMkdirAll(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "crust %s: failed to create rules dir: %v\n", pcfg.name, err)
+		fmt.Fprintf(os.Stderr, "crust %s: failed to create rules dir: %v\n", name, err)
 		os.Exit(1)
 	}
 
 	engine, err := rules.NewEngine(rules.EngineConfig{
 		UserRulesDir:        dir,
-		DisableBuiltin:      *disableBuiltin || cfg.Rules.DisableBuiltin,
-		SubprocessIsolation: true,
+		DisableBuiltin:      *cf.disableBuiltin || cfg.Rules.DisableBuiltin,
+		SubprocessIsolation: subprocessIsolation,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", pcfg.name, err)
+		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", name, err)
+		os.Exit(1)
+	}
+	return engine
+}
+
+// runProxyCommand implements the shared flag parsing, config loading, engine
+// init, and subprocess launch for all proxy subcommands (acp-wrap, mcp gateway, wrap).
+func runProxyCommand(pcfg proxyRunConfig, args []string) {
+	fs := flag.NewFlagSet(pcfg.name, flag.ExitOnError)
+	cf := registerCommonFlags(fs)
+	_ = fs.Parse(args)
+
+	subCmd := fs.Args()
+	if len(subCmd) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: crust %s\n", pcfg.usage)
 		os.Exit(1)
 	}
 
+	engine := loadEngine(pcfg.name, cf, true)
 	os.Exit(pcfg.run(engine, subCmd))
 }
 
@@ -984,12 +1008,98 @@ func runAcpWrap(args []string) {
 	}, args)
 }
 
+func runMCP(args []string) {
+	if len(args) < 1 {
+		printMCPUsage()
+		return
+	}
+	switch args[0] {
+	case "gateway":
+		runMcpGateway(args[1:])
+	case "http":
+		runMcpHTTP(args[1:])
+	case "discover":
+		runMCPDiscover(args[1:])
+	default:
+		printMCPUsage()
+	}
+}
+
+func printMCPUsage() {
+	banner.PrintBanner(Version)
+	fmt.Println()
+	fmt.Println(tui.Separator("MCP Commands"))
+	fmt.Print(tui.AlignColumns([][2]string{
+		{"crust mcp gateway [flags] -- <cmd...>", "MCP stdio proxy with security rules"},
+		{"crust mcp http --upstream <url>", "MCP HTTP reverse proxy with security rules"},
+		{"crust mcp discover [--patch] [--restore]", "Scan/patch MCP client configs"},
+	}, "  ", 2, tui.StyleCommand, tui.StyleMuted))
+	fmt.Println()
+}
+
 func runMcpGateway(args []string) {
 	runProxyCommand(proxyRunConfig{
-		name:  "mcp-gateway",
-		usage: "mcp-gateway [flags] -- <mcp-server-command> [args...]",
+		name:  "mcp gateway",
+		usage: "mcp gateway [flags] -- <mcp-server-command> [args...]",
 		run:   mcpgateway.Run,
 	}, args)
+}
+
+func runMcpHTTP(args []string) {
+	fs := flag.NewFlagSet("mcp http", flag.ExitOnError)
+	upstream := fs.String("upstream", "", "Upstream MCP server URL (required)")
+	listen := fs.String("listen", "127.0.0.1:9091", "Local listen address")
+	cf := registerCommonFlags(fs)
+	_ = fs.Parse(args)
+
+	if *upstream == "" {
+		fmt.Fprintf(os.Stderr, "Usage: crust mcp http --upstream <url> [flags]\n")
+		fmt.Fprintf(os.Stderr, "Error: --upstream is required\n")
+		os.Exit(1)
+	}
+
+	engine := loadEngine("mcp http", cf, false)
+
+	gw, err := mcpgateway.NewHTTPGateway(*upstream, engine)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "crust mcp http: %v\n", err)
+		os.Exit(1)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.Handle("/", gw)
+
+	srv := &http.Server{
+		Addr:              *listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	mcpLog := logger.New("mcp.http")
+	mcpLog.Info("Starting MCP HTTP gateway: listen=%s upstream=%s rules=%d",
+		*listen, *upstream, engine.RuleCount())
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		mcpLog.Info("Shutting down MCP HTTP gateway...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		//nolint:errcheck // best-effort shutdown
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintf(os.Stderr, "crust mcp http: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func runWrap(args []string) {
@@ -998,6 +1108,108 @@ func runWrap(args []string) {
 		usage: "wrap [flags] -- <command> [args...]",
 		run:   autowrap.Run,
 	}, args)
+}
+
+// runMCPDiscover handles the mcp discover subcommand.
+func runMCPDiscover(args []string) {
+	fs := flag.NewFlagSet("mcp discover", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Output as JSON")
+	patch := fs.Bool("patch", false, "Patch configs to route through crust wrap")
+	restore := fs.Bool("restore", false, "Restore configs from backups")
+	_ = fs.Parse(args)
+
+	header := tui.BrandGradient("CRUST", true) + " " + tui.BrandGradient("MCP DISCOVER", true)
+	if tui.IsPlainMode() {
+		header = "CRUST MCP DISCOVER"
+	}
+
+	if *restore {
+		mcpdiscover.RestoreAll()
+		tui.PrintSuccess("MCP configs restored from backups")
+		return
+	}
+
+	result := mcpdiscover.Discover()
+
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(result) //nolint:errcheck
+		return
+	}
+
+	fmt.Println()
+	fmt.Println(header)
+	fmt.Println()
+
+	if len(result.Servers) == 0 && len(result.Errors) == 0 {
+		tui.PrintInfo("No MCP servers found in known client configs")
+		return
+	}
+
+	// Group servers by client
+	byClient := make(map[mcpdiscover.ClientType][]mcpdiscover.MCPServer)
+	for _, srv := range result.Servers {
+		byClient[srv.Client] = append(byClient[srv.Client], srv)
+	}
+
+	for client, servers := range byClient {
+		fmt.Printf("  %s (%d servers)\n", tui.StyleBold.Render(string(client)), len(servers))
+		for _, srv := range servers {
+			status := ""
+			if srv.AlreadyWrapped {
+				status = tui.StyleSuccess.Render(" [wrapped]")
+			}
+			transport := string(srv.Transport)
+			if srv.Transport == mcpdiscover.TransportHTTP {
+				transport += " (skip)"
+			}
+			fmt.Printf("    %s  %s  %s%s\n",
+				tui.StyleCommand.Render(srv.Name),
+				tui.StyleMuted.Render(transport),
+				commandSummary(srv),
+				status,
+			)
+		}
+		fmt.Println()
+	}
+
+	for _, e := range result.Errors {
+		tui.PrintWarning(fmt.Sprintf("%s: %v", e.ConfigPath, e.Err))
+	}
+
+	if *patch {
+		crustBin, err := mcpdiscover.CrustBinaryPath()
+		if err != nil {
+			tui.PrintError(fmt.Sprintf("Cannot resolve crust binary: %v", err))
+			os.Exit(1)
+		}
+		patchResult := mcpdiscover.PatchConfigs(crustBin)
+		if patchResult.Patched > 0 {
+			tui.PrintSuccess(fmt.Sprintf("Patched %d server(s) to route through crust wrap", patchResult.Patched))
+		} else {
+			tui.PrintInfo("Nothing to patch (all servers already wrapped or HTTP-only)")
+		}
+		for _, e := range patchResult.Errors {
+			tui.PrintWarning(fmt.Sprintf("%s: %v", e.ConfigPath, e.Err))
+		}
+	}
+}
+
+// commandSummary returns a short display string for an MCP server.
+func commandSummary(srv mcpdiscover.MCPServer) string {
+	if srv.Transport == mcpdiscover.TransportHTTP {
+		return srv.URL
+	}
+	s := srv.Command
+	if len(srv.Args) > 0 {
+		s += " " + strings.Join(srv.Args, " ")
+	}
+	const maxLen = 60
+	if len(s) > maxLen {
+		s = s[:maxLen-3] + "..."
+	}
+	return s
 }
 
 // runUninstall handles the uninstall subcommand
@@ -1151,7 +1363,7 @@ func runDoctor(args []string) {
 	fmt.Println(tui.Separator("Provider Diagnostics"))
 	fmt.Println()
 
-	results := proxy.RunDoctor(proxy.DoctorOptions{
+	results := httpproxy.RunDoctor(httpproxy.DoctorOptions{
 		Timeout:       *timeout,
 		Retries:       *retries,
 		UserProviders: cfg.Upstream.Providers,
@@ -1162,9 +1374,9 @@ func runDoctor(args []string) {
 	for _, r := range results {
 		printDoctorResult(r)
 		switch r.Status {
-		case proxy.StatusOK:
+		case httpproxy.StatusOK:
 			okCount++
-		case proxy.StatusAuthError:
+		case httpproxy.StatusAuthError:
 			warnCount++
 		default:
 			errCount++
@@ -1189,7 +1401,7 @@ func runDoctor(args []string) {
 }
 
 // printDoctorResult prints a single provider check result.
-func printDoctorResult(r proxy.DoctorResult) {
+func printDoctorResult(r httpproxy.DoctorResult) {
 	tag := r.Status.String()
 	latency := fmt.Sprintf("(%s)", r.Duration.Round(time.Millisecond))
 
@@ -1207,10 +1419,10 @@ func printDoctorResult(r proxy.DoctorResult) {
 	var icon string
 	var style lipgloss.Style
 	switch r.Status {
-	case proxy.StatusOK:
+	case httpproxy.StatusOK:
 		icon = tui.IconCheck
 		style = tui.StyleSuccess
-	case proxy.StatusAuthError:
+	case httpproxy.StatusAuthError:
 		icon = tui.IconWarning
 		style = tui.StyleWarning
 	default:
@@ -1232,7 +1444,7 @@ func printDoctorResult(r proxy.DoctorResult) {
 // buildDoctorReport generates a sanitized markdown report for GitHub issues.
 // Privacy: user-defined provider URLs are masked to host-only; API keys are
 // never included (DoctorResult doesn't carry them).
-func buildDoctorReport(results []proxy.DoctorResult, okCount, warnCount, errCount int) string {
+func buildDoctorReport(results []httpproxy.DoctorResult, okCount, warnCount, errCount int) string {
 	var sb strings.Builder
 	sb.WriteString("## Crust Doctor Report\n\n")
 	sb.WriteString("```\n")

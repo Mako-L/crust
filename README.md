@@ -110,7 +110,7 @@ crust stop       # Stop crust
 For [MCP](https://modelcontextprotocol.io) servers, Crust intercepts `tools/call` and `resources/read` requests before they reach the server.
 
 ```bash
-crust mcp-gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
+crust mcp gateway -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
 ```
 
 Works with any MCP server. See the [MCP setup guide](docs/mcp.md) for details and examples.

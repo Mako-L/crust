@@ -429,50 +429,14 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	}
 
 	// Step 7: DLP — detect API keys/tokens in all operations.
-	{
-		dlpContent := info.RawJSON
-		if dlpContent == "" {
-			dlpContent = info.Content
-		}
-		if dlpContent != "" {
-			for _, pat := range dlpPatterns {
-				if pat.re.MatchString(dlpContent) {
-					return MatchResult{
-						Matched:  true,
-						RuleName: pat.name,
-						Severity: SeverityCritical,
-						Action:   ActionBlock,
-						Message:  pat.message,
-					}
-				}
-			}
-
-			// Crypto-specific DLP (checksum-validated).
-			if m := scanCrypto(dlpContent); m != nil {
-				return MatchResult{
-					Matched:  true,
-					RuleName: m.name,
-					Severity: SeverityCritical,
-					Action:   ActionBlock,
-					Message:  m.message,
-				}
-			}
-
-			if findings := e.dlpScanner.Scan(dlpContent); len(findings) > 0 {
-				f := findings[0]
-				msg := "Blocked secret — " + f.Description
-				if len(findings) > 1 {
-					msg += fmt.Sprintf(" (and %d more)", len(findings)-1)
-				}
-				return MatchResult{
-					Matched:  true,
-					RuleName: "builtin:dlp-gitleaks-" + f.RuleID,
-					Severity: SeverityHigh,
-					Action:   ActionBlock,
-					Message:  msg,
-				}
-			}
-		}
+	// Delegates to ScanDLP which runs all 3 tiers (hardcoded patterns,
+	// crypto-specific checksum validation, gitleaks).
+	dlpContent := info.RawJSON
+	if dlpContent == "" {
+		dlpContent = info.Content
+	}
+	if m := e.ScanDLP(dlpContent); m != nil {
+		return *m
 	}
 
 	e.mu.RLock()

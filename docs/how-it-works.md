@@ -11,7 +11,7 @@ Agent Request ──▶ [Layer 0: History Scan] ──▶ LLM ──▶ [Layer 1
                    (14-30μs)                             (14-30μs)
                "Bad agent detected"                   "Action blocked"
 
-Rule Evaluation (14 steps, 0-13):
+Rule Evaluation (13 steps, 0-12):
   0.  Self-protection pre-checker → blocks management API/socket access
   1.  Sanitize tool name → strip null bytes, control chars
   2.  Extract paths, commands, content from tool arguments
@@ -22,15 +22,14 @@ Rule Evaluation (14 steps, 0-13):
   7.  DLP Secret Detection → API keys/tokens + crypto keys (BIP39, xprv, WIF)
   8.  Prepare paths → filter shell globs, normalize, expand filesystem globs
   9.  Resolve symlinks → match both original and resolved
-  10. Block /proc access (hardcoded, after symlink resolution)
-  11. Block crypto wallet access (hardcoded, after symlink resolution)
-  12. Operation-based rules → path/command/host matching
-  13. Fallback rules (content-only) → raw JSON matching for ANY tool
+  10. Hardcoded path guards → /proc, crypto wallets (after symlink resolution)
+  11. Operation-based rules → path/command/host matching
+  12. Fallback rules (content-only) → raw JSON matching for ANY tool
 ```
 
 **Layer 0 (Request History):** Scans tool_calls in conversation history. Catches "bad agent" patterns where malicious actions already occurred in past turns.
 
-**Rule Engine:** Evaluates tool calls through the 14-step pipeline above. Self-protection (step 0) is injected via dependency injection to avoid circular imports. Steps 8-10 (filter shell globs, normalize paths, expand filesystem globs) are combined into a single `PreparePaths` call.
+**Rule Engine:** Evaluates tool calls through the 13-step pipeline above. Self-protection (step 0) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 10) use a registry pattern — add new guards without modifying the pipeline.
 
 **[MCP Gateway](mcp.md) (`crust mcp gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Inspects both directions — client→server requests (`tools/call`, `resources/read`) and server→client responses (DLP secret scanning). Works with any MCP server (filesystem, database, custom).
 
@@ -220,7 +219,7 @@ BIP39 mnemonics are the universal seed phrase standard used by Bitcoin, Ethereum
 
 ### Crypto Wallet Path Protection
 
-Step 11 blocks access to cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 9) so symlink bypasses are caught.
+Step 10 blocks access to sensitive path prefixes including `/proc` and cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 9) so symlink bypasses are caught. New guards can be added to the `pathGuards` registry without modifying the pipeline.
 
 Protected chains: Bitcoin, Litecoin, Dogecoin, Dash, Ethereum, Electrum, Monero, Zcash, Cardano, Cosmos, Polkadot, Avalanche, Tron, Solana, Sui, Aptos.
 

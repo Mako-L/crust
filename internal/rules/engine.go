@@ -362,7 +362,7 @@ func (e *Engine) AddRulesFromFile(path string) (string, error) {
 	return destPath, nil
 }
 
-// Evaluate evaluates a tool call through a 14-step pipeline (steps 0-13).
+// Evaluate evaluates a tool call through a 13-step pipeline (steps 0-12).
 // Returns MatchResult indicating whether the call is allowed, blocked, or logged.
 func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	// Step 0: Pre-checker (self-protection). Injected at construction time
@@ -450,36 +450,19 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	resolvedPaths := e.normalizer.resolveSymlinks(normalizedPaths)
 	allPaths := mergeUnique(normalizedPaths, resolvedPaths)
 
-	// Step 10: Block /proc access (hardcoded; after symlink resolution to catch symlink bypasses).
-	if blocked, path := hasProcPath(allPaths); blocked {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-proc",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  fmt.Sprintf("Cannot access %s — /proc may expose secrets, API keys, and process memory", path),
-		}
+	// Step 10: Hardcoded path guards (after symlink resolution to catch symlink bypasses).
+	if m := checkHardcodedPaths(allPaths); m != nil {
+		return *m
 	}
 
-	// Step 11: Block crypto wallet access (hardcoded; after symlink resolution to catch symlink bypasses).
-	if blocked, path := hasCryptoWalletPath(allPaths); blocked {
-		return MatchResult{
-			Matched:  true,
-			RuleName: "builtin:protect-crypto-wallet",
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  fmt.Sprintf("Cannot access %s — crypto wallet directory", path),
-		}
-	}
-
-	// Step 12: Evaluate operation-based rules (for known tools).
+	// Step 11: Evaluate operation-based rules (for known tools).
 	if info.Operation != OpNone {
 		if result := e.evaluateOperationRules(rules, info, allPaths, call.Name); result.Matched {
 			return result
 		}
 	}
 
-	// Step 13: Fallback content-only rules — matches raw JSON of any tool.
+	// Step 12: Fallback content-only rules — matches raw JSON of any tool.
 	contentForRules := info.RawJSON
 	if contentForRules == "" {
 		contentForRules = info.Content

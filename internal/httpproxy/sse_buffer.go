@@ -12,7 +12,6 @@ import (
 	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
-	"github.com/BakeLens/crust/internal/selfprotect"
 	"github.com/BakeLens/crust/internal/shellutil"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/types"
@@ -232,16 +231,10 @@ func (b *BufferedSSEWriter) FlushModified(interceptor *security.Interceptor, blo
 	useReplaceMode := blockMode.IsReplace()
 
 	for idx, tc := range b.toolCalls {
-		// Self-protection pre-check: block management API/socket access before rule engine.
-		var matchResult rules.MatchResult
-		if m := selfprotect.Check(tc.Arguments.String()); m != nil {
-			matchResult = *m
-		} else {
-			matchResult = engine.Evaluate(rules.ToolCall{
-				Name:      tc.Name,
-				Arguments: json.RawMessage(tc.Arguments.Bytes()),
-			})
-		}
+		matchResult := engine.Evaluate(rules.ToolCall{
+			Name:      tc.Name,
+			Arguments: json.RawMessage(tc.Arguments.Bytes()),
+		})
 
 		isBlocked := matchResult.Matched && matchResult.Action == rules.ActionBlock
 		ruleName := ""

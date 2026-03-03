@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -81,6 +80,9 @@ type Engine struct {
 	// Stats
 	hitCounts map[string]*int64
 
+	// Pre-checker runs before the evaluation pipeline (e.g., self-protection).
+	preChecker func(rawJSON string) *MatchResult
+
 	// Callbacks for reload notifications
 	onReloadCallbacks []ReloadCallback
 }
@@ -115,6 +117,10 @@ type EngineConfig struct {
 	UserRulesDir        string
 	DisableBuiltin      bool
 	SubprocessIsolation bool // Isolate shell interpreter in a subprocess for crash safety
+
+	// PreChecker is called before the evaluation pipeline (e.g., self-protection).
+	// Injected at construction time to avoid circular imports with selfprotect.
+	PreChecker func(rawJSON string) *MatchResult
 }
 
 // ReloadCallback is called after rules are reloaded
@@ -166,6 +172,7 @@ func NewEngineWithNormalizer(cfg EngineConfig, normalizer *Normalizer) (*Engine,
 		preFilter:  NewPreFilter(),
 		dlpScanner: NewDLPScanner(),
 		config:     cfg,
+		preChecker: cfg.PreChecker,
 		hitCounts:  make(map[string]*int64),
 	}
 
@@ -355,9 +362,18 @@ func (e *Engine) AddRulesFromFile(path string) (string, error) {
 	return destPath, nil
 }
 
-// Evaluate evaluates a tool call against path-based rules
-// Returns MatchResult (same as pattern-based for compatibility)
+// Evaluate evaluates a tool call through a 14-step pipeline (steps 0-13).
+// Returns MatchResult indicating whether the call is allowed, blocked, or logged.
 func (e *Engine) Evaluate(call ToolCall) MatchResult {
+	// Step 0: Pre-checker (self-protection). Injected at construction time
+	// to avoid circular imports. Blocks management API/socket access before
+	// any rule evaluation.
+	if e.preChecker != nil {
+		if m := e.preChecker(string(call.Arguments)); m != nil {
+			return *m
+		}
+	}
+
 	// Step 1: Sanitize tool name — defense-in-depth at the security boundary.
 	call.Name = SanitizeToolName(call.Name)
 
@@ -463,20 +479,14 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 	rules := e.merged
 	e.mu.RUnlock()
 
-	// Step 8: Filter bare shell globs — they're not real paths.
-	info.Paths = filterShellGlobs(info.Paths)
+	// Step 8: Prepare paths — filter bare shell globs, normalize, expand filesystem globs.
+	normalizedPaths := e.normalizer.PreparePaths(info.Paths)
 
-	// Step 9: Normalize paths (expand ~, env vars; no symlink resolution yet).
-	normalizedPaths := e.normalizer.NormalizeAll(info.Paths)
-
-	// Step 10: Expand globs against real filesystem (e.g. ~/.e* → ~/.env).
-	normalizedPaths = expandFileGlobs(normalizedPaths)
-
-	// Step 11: Resolve symlinks — match both original and resolved paths.
+	// Step 9: Resolve symlinks — match both original and resolved paths.
 	resolvedPaths := e.normalizer.resolveSymlinks(normalizedPaths)
 	allPaths := mergeUnique(normalizedPaths, resolvedPaths)
 
-	// Step 12: Block /proc access (hardcoded; after symlink resolution to catch symlink bypasses).
+	// Step 10: Block /proc access (hardcoded; after symlink resolution to catch symlink bypasses).
 	if blocked, path := hasProcPath(allPaths); blocked {
 		return MatchResult{
 			Matched:  true,
@@ -487,7 +497,7 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 		}
 	}
 
-	// Step 13: Block crypto wallet access (hardcoded; after symlink resolution to catch symlink bypasses).
+	// Step 11: Block crypto wallet access (hardcoded; after symlink resolution to catch symlink bypasses).
 	if blocked, path := hasCryptoWalletPath(allPaths); blocked {
 		return MatchResult{
 			Matched:  true,
@@ -498,14 +508,14 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
 		}
 	}
 
-	// Step 14: Evaluate operation-based rules (for known tools).
+	// Step 12: Evaluate operation-based rules (for known tools).
 	if info.Operation != OpNone {
 		if result := e.evaluateOperationRules(rules, info, allPaths, call.Name); result.Matched {
 			return result
 		}
 	}
 
-	// Step 15: Fallback content-only rules — matches raw JSON of any tool.
+	// Step 13: Fallback content-only rules — matches raw JSON of any tool.
 	contentForRules := info.RawJSON
 	if contentForRules == "" {
 		contentForRules = info.Content
@@ -1199,90 +1209,4 @@ func (e *Engine) incrementHitCount(name string) {
 	if count != nil {
 		atomic.AddInt64(count, 1)
 	}
-}
-
-// expandFileGlobs expands paths containing glob metacharacters against the
-// real filesystem. Crust runs locally on the same host as the agent, so it
-// can resolve globs to actual files. This replaces the heuristic reverse-glob
-// matcher with precise filesystem checks:
-//   - "cat /home/user/.e*" → filepath.Glob finds /home/user/.env → blocked
-//   - "tar -C /tmp/*" → filepath.Glob finds /tmp/foo, /tmp/bar → not protected → allowed
-//   - "cat /home/user/.b*" → filepath.Glob finds /home/user/.bashrc → not protected → allowed
-//
-// SECURITY: If a glob matches no files, the raw path is kept so the rule
-// matcher can still detect malicious intent (e.g., "bat ~/.ssh/id_*00"
-// targets SSH keys even if the glob resolves to nothing on disk).
-// Non-glob paths pass through unchanged.
-func expandFileGlobs(paths []string) []string {
-	fs := pathutil.DefaultFS()
-	result := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if !containsGlob(p) {
-			result = append(result, p)
-			continue
-		}
-		matches, err := filepath.Glob(p)
-		if err != nil || len(matches) == 0 {
-			// Keep the raw path — dropping it would let an agent bypass
-			// rules by appending glob chars (e.g., "id_*00" to evade "id_*").
-			result = append(result, p)
-			continue
-		}
-		// SECURITY: filepath.Glob returns canonical casing from the filesystem.
-		// On case-insensitive APFS, a lowered glob like "/users/cyy/.e*" may
-		// return "/users/cyy/.Env" (canonical case). Re-lower to match
-		// the normalizer's lowering and prevent case-based pattern bypasses.
-		for _, m := range matches {
-			result = append(result, fs.Lower(pathutil.ToSlash(m)))
-		}
-	}
-	return result
-}
-
-// filterShellGlobs removes bare shell glob patterns from a path list.
-// The shell parser may extract glob patterns (e.g., "*" from "<*" redirections)
-// as file paths. These are not real paths — the shell would expand them before
-// any file operation. A bare "*" normalized to "/cwd/*" falsely matches any
-// protected glob pattern like "**/.env".
-//
-// Only filters paths that consist entirely of glob metacharacters and digits
-// (e.g., "*", "?", "0000", "*.txt"). Real file paths with glob chars in
-// directory components (already quoted in shell) are unaffected because they
-// contain non-glob path characters like "/".
-func filterShellGlobs(paths []string) []string {
-	result := paths[:0] // reuse backing array
-	for _, p := range paths {
-		if isShellGlob(p) {
-			continue
-		}
-		result = append(result, p)
-	}
-	return result
-}
-
-// isShellGlob returns true if the path is a bare shell glob pattern
-// (no path separators) that should not be treated as a real file path.
-// The shell parser may extract glob patterns (e.g., "*" from "<*"
-// redirections) as file paths. These are not real paths — the shell
-// would expand them before any file operation.
-//
-// Only filters paths WITHOUT path separators (e.g., "*", "?.txt").
-// Paths WITH separators like "/home/user/.ssh/id_*" are kept because
-// they reference real file system locations and must be checked.
-func isShellGlob(p string) bool {
-	if p == "" {
-		return false
-	}
-	// If it contains a path separator, it's a real path reference
-	if strings.ContainsRune(p, '/') || strings.ContainsRune(p, '\\') {
-		return false
-	}
-	// Must contain at least one glob metacharacter
-	for _, r := range p {
-		switch r {
-		case '*', '?', '[':
-			return true
-		}
-	}
-	return false
 }

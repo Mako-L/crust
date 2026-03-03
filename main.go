@@ -31,6 +31,7 @@ import (
 	"github.com/BakeLens/crust/internal/mcpgateway"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
+	"github.com/BakeLens/crust/internal/selfprotect"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/tui"
 	"github.com/BakeLens/crust/internal/tui/banner"
@@ -446,6 +447,7 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 			UserRulesDir:        rulesDir,
 			DisableBuiltin:      cfg.Rules.DisableBuiltin,
 			SubprocessIsolation: true,
+			PreChecker:          selfprotect.Check,
 		}
 
 		ruleEngine, err := rules.NewEngine(engineCfg)
@@ -976,6 +978,7 @@ func loadEngine(name string, cf commonFlags, subprocessIsolation bool) *rules.En
 		UserRulesDir:        dir,
 		DisableBuiltin:      *cf.disableBuiltin || cfg.Rules.DisableBuiltin,
 		SubprocessIsolation: subprocessIsolation,
+		PreChecker:          selfprotect.Check,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", name, err)

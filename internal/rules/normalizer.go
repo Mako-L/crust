@@ -194,6 +194,76 @@ func (n *Normalizer) NormalizeAll(paths []string) []string {
 	return result
 }
 
+// PreparePaths runs the path preparation pipeline (evaluation step 8):
+// filter bare shell globs → normalize → expand filesystem globs.
+func (n *Normalizer) PreparePaths(paths []string) []string {
+	paths = filterShellGlobs(paths)
+	paths = n.NormalizeAll(paths)
+	paths = expandFileGlobs(paths)
+	return paths
+}
+
+// expandFileGlobs expands paths containing glob metacharacters against the
+// real filesystem. Non-glob paths pass through unchanged.
+//
+// SECURITY: If a glob matches no files, the raw path is kept so the rule
+// matcher can still detect malicious intent (e.g., "bat ~/.ssh/id_*00"
+// targets SSH keys even if the glob resolves to nothing on disk).
+func expandFileGlobs(paths []string) []string {
+	fs := pathutil.DefaultFS()
+	result := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !containsGlob(p) {
+			result = append(result, p)
+			continue
+		}
+		matches, err := filepath.Glob(p)
+		if err != nil || len(matches) == 0 {
+			result = append(result, p)
+			continue
+		}
+		// SECURITY: filepath.Glob returns canonical casing from the filesystem.
+		// On case-insensitive APFS, re-lower to match the normalizer's lowering.
+		for _, m := range matches {
+			result = append(result, fs.Lower(pathutil.ToSlash(m)))
+		}
+	}
+	return result
+}
+
+// filterShellGlobs removes bare shell glob patterns from a path list.
+// The shell parser may extract glob patterns (e.g., "*" from "<*" redirections)
+// that are not real paths. A bare "*" normalized to "/cwd/*" falsely matches
+// protected glob patterns like "**/.env".
+func filterShellGlobs(paths []string) []string {
+	result := paths[:0] // reuse backing array
+	for _, p := range paths {
+		if isShellGlob(p) {
+			continue
+		}
+		result = append(result, p)
+	}
+	return result
+}
+
+// isShellGlob returns true if the path is a bare shell glob pattern
+// (no path separators) that should not be treated as a real file path.
+func isShellGlob(p string) bool {
+	if p == "" {
+		return false
+	}
+	if strings.ContainsRune(p, '/') || strings.ContainsRune(p, '\\') {
+		return false
+	}
+	for _, r := range p {
+		switch r {
+		case '*', '?', '[':
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizePattern normalizes a glob pattern for profile generation.
 // Unlike Normalize(), it does NOT convert relative paths to absolute or run
 // pathutil.CleanPath, which would destroy glob syntax like ** and *.

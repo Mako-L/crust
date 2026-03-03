@@ -156,7 +156,7 @@ Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup gui
 
 ### Built-in Rules
 
-Crust ships with **21 security rules** (14 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
+Crust ships with **23 security rules** (16 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
 
 | Category | What's Protected |
 |----------|-----------------|
@@ -166,7 +166,8 @@ Crust ships with **21 security rules** (14 locked, 7 user-disablable) and **34 D
 | **Browser Data** | Chrome, Firefox, Safari passwords, cookies, local storage |
 | **Package Tokens** | npm, pip, Cargo, Composer, NuGet, Gem auth tokens |
 | **Git Credentials** | `.git-credentials`, `.config/git/credentials` |
-| **Persistence** | Shell RC files, `authorized_keys` |
+| **Persistence** | Shell RC files, `authorized_keys`, cron/systemd/launchd, git hooks |
+| **Agent Config** | `.claude/settings.json`, `.cursor/mcp.json`, `.mcp.json` — prevents privilege escalation |
 | **DLP Token Detection** | Content-based scanning for real API keys and tokens (AWS, GitHub, Stripe, OpenAI, Anthropic, and [23 more](docs/how-it-works.md#dlp-secret-detection)) |
 | **Key Exfiltration** | Content-based PEM private key detection |
 | **Crypto Wallets** | BIP39 mnemonics, xprv/WIF keys (checksum-validated), wallet directories for 16 chains |

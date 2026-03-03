@@ -96,11 +96,6 @@ func (n *Normalizer) Normalize(path string) string {
 	// Convert to forward slashes early so all subsequent checks (~/,  ./, etc.) work.
 	path = pathutil.ToSlash(path)
 
-	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
-	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
-	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
-	path = stripADS(path)
-
 	// SECURITY: Sanitize invalid UTF-8 before NFKC — invalid bytes (e.g., 0xF5)
 	// can corrupt NFKC processing of subsequent valid runes, breaking idempotency.
 	path = strings.ToValidUTF8(path, "\uFFFD")
@@ -140,6 +135,14 @@ func (n *Normalizer) Normalize(path string) string {
 
 	// Step 4: Convert relative paths to absolute
 	path = n.makeAbsolute(path)
+
+	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
+	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
+	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
+	// Runs AFTER makeAbsolute so drive letter detection is unambiguous:
+	// bare "A:" in a relative path becomes "/cwd/A:" where the colon is
+	// clearly an ADS marker, not a drive separator.
+	path = stripADS(path)
 
 	// Step 4.5: Resolve well-known symlinks BEFORE path cleaning so that
 	// ".." traversals resolve correctly (e.g., /dev/fd/../environ →
@@ -504,7 +507,7 @@ func stripADS(p string) string {
 	// Process each path segment, stripping everything after the first colon.
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
-		// Skip empty segments and drive letter (first segment like "C:")
+		// Skip drive letter segment (e.g., "C:") when it's a path prefix.
 		if i == 0 && len(part) == 2 && part[1] == ':' && pathutil.IsDriverLetter(part[0]) {
 			continue
 		}

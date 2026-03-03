@@ -120,7 +120,12 @@ jobs:
         run: go build -tags notui ./...
 
       - name: Unit tests (with race detector and coverage)
+        if: matrix.os == 'ubuntu-latest'
         run: go test -race -short -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Unit tests (with race detector)
+        if: matrix.os != 'ubuntu-latest'
+        run: go test -race -short ./...
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'

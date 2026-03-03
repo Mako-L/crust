@@ -185,6 +185,10 @@ func runStart(args []string) {
 		tui.SetPlainMode(true)
 	}
 
+	// Save original CLI flag values before LoadSecrets overwrites with auto-generated values.
+	cliAPIKey := *apiKey
+	cliDBKey := *dbKey
+
 	// Load secrets from OS keyring / file fallback, with CLI flag overrides.
 	secrets, err := config.LoadSecretsWithDefaults(*apiKey, *dbKey)
 	if err != nil {
@@ -290,9 +294,12 @@ func runStart(args []string) {
 		daemonArgs = append(daemonArgs, "--block-mode", *blockMode)
 	}
 
-	// Persist secrets to keystore so the daemon process can read them.
-	// Daemon reads from OS keyring / file fallback — no env var propagation.
-	if startupCfg.APIKey != "" || startupCfg.EncryptionKey != "" {
+	// Persist secrets to keystore only when the user explicitly provided
+	// values via CLI flags or the TUI prompt. Auto-generated values (DB key)
+	// are already saved by LoadSecrets — re-saving would trigger redundant
+	// OS keychain prompts on macOS.
+	userProvidedSecret := cliAPIKey != "" || cliDBKey != "" || startupCfg.APIKey != *apiKey
+	if userProvidedSecret {
 		if err := config.SaveSecrets(&config.Secrets{
 			LLMAPIKey: startupCfg.APIKey,
 			DBKey:     startupCfg.EncryptionKey,

@@ -32,6 +32,18 @@ func LockExclusive(f *os.File) error {
 	)
 }
 
+// TryLockExclusive attempts to acquire an exclusive lock on f without blocking.
+// Returns an error immediately if the lock is held.
+func TryLockExclusive(f *os.File) error {
+	ol := &windows.Overlapped{}
+	return windows.LockFileEx(
+		windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0, 1, 0,
+		ol,
+	)
+}
+
 // Unlock releases a lock on f via UnlockFileEx.
 func Unlock(f *os.File) {
 	ol := &windows.Overlapped{}

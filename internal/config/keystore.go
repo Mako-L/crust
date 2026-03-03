@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/BakeLens/crust/internal/fileutil"
+	"github.com/BakeLens/crust/internal/logger"
 	"github.com/zalando/go-keyring"
 )
+
+var ksLog = logger.New("keystore")
 
 const (
 	keystoreService = "crust"
@@ -21,13 +24,16 @@ var ErrKeyNotFound = errors.New("secret not found")
 // secretsMap is the JSON structure of the fallback secrets file.
 type secretsMap map[string]string
 
+// errNoHomeDir is returned when the home directory cannot be determined.
+var errNoHomeDir = errors.New("cannot determine home directory; set $HOME")
+
 // secretsFilePath returns the path to ~/.crust/secrets.json.
-func secretsFilePath() string {
+func secretsFilePath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = "/tmp"
+		return "", errNoHomeDir
 	}
-	return filepath.Join(home, ".crust", secretsFileName)
+	return filepath.Join(home, ".crust", secretsFileName), nil
 }
 
 // keystoreGet retrieves a secret by key name.
@@ -43,11 +49,11 @@ func keystoreGet(key string) (string, error) {
 // keystoreSet stores a secret.
 // Tries OS keyring first; falls back to file if keyring is unavailable.
 func keystoreSet(key, value string) error {
-	if err := keyring.Set(keystoreService, key, value); err == nil {
-		return nil
+	if err := keyring.Set(keystoreService, key, value); err != nil {
+		ksLog.Warn("OS keyring unavailable, using file fallback: %v", err)
+		return fileSet(key, value)
 	}
-	// Keyring unavailable (headless/Docker/CI), use file fallback.
-	return fileSet(key, value)
+	return nil
 }
 
 // keystoreDelete removes a secret from both keyring and file.
@@ -59,8 +65,11 @@ func keystoreDelete(key string) error {
 
 // fileGet reads a secret from the fallback secrets.json file with a shared lock.
 func fileGet(key string) (string, error) {
-	path := secretsFilePath()
-	f, err := os.Open(path)
+	path, err := secretsFilePath()
+	if err != nil {
+		return "", err
+	}
+	f, err := fileutil.OpenReadLocked(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", ErrKeyNotFound
@@ -68,11 +77,7 @@ func fileGet(key string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-
-	if err := lockShared(f); err != nil {
-		return "", err
-	}
-	defer unlock(f)
+	defer fileutil.Unlock(f)
 
 	var secrets secretsMap
 	if err := json.NewDecoder(f).Decode(&secrets); err != nil {
@@ -88,22 +93,21 @@ func fileGet(key string) (string, error) {
 
 // fileSet writes a secret to the fallback secrets.json file with an exclusive lock.
 func fileSet(key, value string) error {
-	path := secretsFilePath()
+	path, err := secretsFilePath()
+	if err != nil {
+		return err
+	}
 
 	if err := fileutil.SecureMkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 
-	f, err := fileutil.SecureOpenFile(path, os.O_RDWR|os.O_CREATE)
+	f, err := fileutil.OpenExclusive(path, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
-	if err := lockExclusive(f); err != nil {
-		return err
-	}
-	defer unlock(f)
+	defer fileutil.Unlock(f)
 
 	// Read existing secrets (may be empty or invalid).
 	secrets := make(secretsMap)
@@ -131,8 +135,11 @@ func fileSet(key, value string) error {
 
 // fileDelete removes a secret from the fallback secrets.json file.
 func fileDelete(key string) error {
-	path := secretsFilePath()
-	f, err := fileutil.SecureOpenFile(path, os.O_RDWR)
+	path, err := secretsFilePath()
+	if err != nil {
+		return err
+	}
+	f, err := fileutil.OpenExclusive(path, os.O_RDWR)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -140,11 +147,7 @@ func fileDelete(key string) error {
 		return err
 	}
 	defer f.Close()
-
-	if err := lockExclusive(f); err != nil {
-		return err
-	}
-	defer unlock(f)
+	defer fileutil.Unlock(f)
 
 	var secrets secretsMap
 	if err := json.NewDecoder(f).Decode(&secrets); err != nil {

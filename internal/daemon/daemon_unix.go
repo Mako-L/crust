@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/fileutil"
-	"golang.org/x/sys/unix"
 )
 
 // pidLockFile holds the open PID file to maintain the flock advisory lock.
@@ -30,7 +29,7 @@ func WritePID() error {
 	if err != nil {
 		return fmt.Errorf("open PID file: %w", err)
 	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil { //nolint:gosec // Fd() fits in int on all supported platforms
+	if err := fileutil.TryLockExclusive(f); err != nil {
 		f.Close()
 		return fmt.Errorf("another instance is running (flock %s): %w", path, err)
 	}

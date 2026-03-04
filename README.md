@@ -21,8 +21,7 @@
 
 <p align="center">
   <a href="https://github.com/BakeLens/crust/actions/workflows/ci.yml"><img src="https://github.com/BakeLens/crust/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://codecov.io/gh/BakeLens/crust"><img src="https://codecov.io/gh/BakeLens/crust/graph/badge.svg" alt="Coverage" /></a>
-  <a href="https://goreportcard.com/report/github.com/BakeLens/crust"><img src="https://goreportcard.com/badge/github.com/BakeLens/crust" alt="Go Report Card" /></a>
+<a href="https://goreportcard.com/report/github.com/BakeLens/crust"><img src="https://goreportcard.com/badge/github.com/BakeLens/crust" alt="Go Report Card" /></a>
   <a href="https://github.com/BakeLens/crust/releases"><img src="https://img.shields.io/github/v/release/BakeLens/crust" alt="Release" /></a>
   <img src="https://img.shields.io/github/go-mod/go-version/BakeLens/crust" alt="Go Version" />
   <img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="License" />

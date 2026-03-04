@@ -473,3 +473,41 @@ rules:
     actions: [read, write, network]
     message: "Blocked: cloud metadata endpoint exposes IAM credentials — SSRF attack vector."
     severity: critical
+
+  # ===========================================================================
+  # 21. AGENT CONFIGURATION PROTECTION
+  # Prevents agents from modifying their own IDE/agent config to escalate
+  # privileges. These files control hooks, MCP server trust, and consent —
+  # an agent that writes its own config can achieve arbitrary code execution.
+  #
+  # CVE-2025-59536: .claude/settings.json hooks → auto-execute on session start
+  # CVE-2025-54135: .cursor/mcp.json → MCP Auto-Run without consent
+  # CVE-2026-21852: .mcp.json → enableAllProjectMcpServers bypasses consent
+  # ===========================================================================
+  - name: protect-agent-config
+    locked: true
+    block:
+      # Claude Code hooks (CVE-2025-59536)
+      - "**/.claude/settings*.json"
+      # Cursor MCP Auto-Run (CVE-2025-54135)
+      - "**/.cursor/mcp.json"
+      # Project-level MCP consent bypass (CVE-2026-21852)
+      - "**/.mcp.json"
+    actions: [write, delete]
+    message: "Blocked: agent config files control hooks and MCP trust — modifying them is a privilege escalation vector."
+    severity: critical
+
+  # ===========================================================================
+  # 22. GIT HOOKS PROTECTION
+  # Git hooks auto-execute on operations like commit, push, and checkout.
+  # An agent writing hooks achieves persistence across all future git usage.
+  #
+  # CVE-2025-68143/68144/68145: Git MCP Server chain → hook injection → RCE
+  # ===========================================================================
+  - name: protect-git-hooks
+    locked: true
+    block:
+      - "**/.git/hooks/**"
+    actions: [write, delete]
+    message: "Blocked: git hooks auto-execute on commit/push/checkout — a persistence and RCE vector."
+    severity: critical

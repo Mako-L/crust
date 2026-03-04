@@ -11,9 +11,8 @@ Agent Request ──▶ [Layer 0: History Scan] ──▶ LLM ──▶ [Layer 1
                    (14-30μs)                             (14-30μs)
                "Bad agent detected"                   "Action blocked"
 
-Pre-filter: Self-protection (blocks management API/socket access)
-
-Layer 1 Rule Evaluation (15 steps):
+Rule Evaluation (13 steps, 0-12):
+  0.  Self-protection pre-checker → blocks management API/socket access
   1.  Sanitize tool name → strip null bytes, control chars
   2.  Extract paths, commands, content from tool arguments
   3.  Normalize Unicode → NFKC, strip invisible chars and confusables
@@ -21,19 +20,16 @@ Layer 1 Rule Evaluation (15 steps):
   5.  Detect encoding obfuscation (base64, hex)
   6.  Block evasive commands (fork bombs, unparseable shell)
   7.  DLP Secret Detection → API keys/tokens + crypto keys (BIP39, xprv, WIF)
-  8.  Filter bare shell globs (not real paths)
-  9.  Normalize paths → expand ~, env vars
-  10. Expand globs against real filesystem
-  11. Resolve symlinks → match both original and resolved
-  12. Block /proc access (hardcoded, after symlink resolution)
-  13. Block crypto wallet access (hardcoded, after symlink resolution)
-  14. Operation-based rules → path/command/host matching
-  15. Fallback rules (content-only) → raw JSON matching for ANY tool
+  8.  Prepare paths → filter shell globs, normalize, expand filesystem globs
+  9.  Resolve symlinks → match both original and resolved
+  10. Hardcoded path guards → /proc, crypto wallets (after symlink resolution)
+  11. Operation-based rules → path/command/host matching
+  12. Fallback rules (content-only) → raw JSON matching for ANY tool
 ```
 
 **Layer 0 (Request History):** Scans tool_calls in conversation history. Catches "bad agent" patterns where malicious actions already occurred in past turns.
 
-**Layer 1 (Response Rules):** Scans LLM-generated tool_calls in responses. Fast pattern matching with friendly error messages.
+**Rule Engine:** Evaluates tool calls through the 13-step pipeline above. Self-protection (step 0) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 10) use a registry pattern — add new guards without modifying the pipeline.
 
 **[MCP Gateway](mcp.md) (`crust mcp gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Inspects both directions — client→server requests (`tools/call`, `resources/read`) and server→client responses (DLP secret scanning). Works with any MCP server (filesystem, database, custom).
 
@@ -170,7 +166,7 @@ The pre-filter runs before the shell parser (step 5) and catches encoding-based 
 
 ## DLP Secret Detection
 
-Step 9 of the evaluation pipeline runs DLP (Data Loss Prevention) patterns against all operations. These patterns detect real API keys, tokens, and cryptocurrency secrets by their format, regardless of file path or tool name.
+Step 7 of the evaluation pipeline runs DLP (Data Loss Prevention) patterns against all operations. These patterns detect real API keys, tokens, and cryptocurrency secrets by their format, regardless of file path or tool name.
 
 In stdio proxy modes (MCP Gateway, ACP Wrap, Auto-detect), DLP also scans **server/agent responses** before they reach the client. This catches secrets leaked by the subprocess — for example, an MCP server returning file content that contains an AWS access key. The response is replaced with a JSON-RPC error so the secret never reaches the client.
 
@@ -211,7 +207,7 @@ Tier 2: [gitleaks](https://github.com/gitleaks/gitleaks) is used as a secondary 
 
 ### Cryptocurrency Key Detection
 
-Step 9 also runs crypto-specific DLP with **cryptographic validation** — not just regex matching. This eliminates false positives by verifying checksums.
+Step 7 also runs crypto-specific DLP with **cryptographic validation** — not just regex matching. This eliminates false positives by verifying checksums.
 
 | Type | Detection | Validation |
 |------|-----------|------------|
@@ -223,7 +219,7 @@ BIP39 mnemonics are the universal seed phrase standard used by Bitcoin, Ethereum
 
 ### Crypto Wallet Path Protection
 
-Step 15 blocks access to cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 13) so symlink bypasses are caught.
+Step 10 blocks access to sensitive path prefixes including `/proc` and cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 9) so symlink bypasses are caught. New guards can be added to the `pathGuards` registry without modifying the pipeline.
 
 Protected chains: Bitcoin, Litecoin, Dogecoin, Dash, Ethereum, Electrum, Monero, Zcash, Cardano, Cosmos, Polkadot, Avalanche, Tron, Solana, Sui, Aptos.
 

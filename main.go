@@ -31,6 +31,7 @@ import (
 	"github.com/BakeLens/crust/internal/mcpgateway"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
+	"github.com/BakeLens/crust/internal/selfprotect"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/tui"
 	"github.com/BakeLens/crust/internal/tui/banner"
@@ -176,7 +177,7 @@ func runStart(args []string) {
 	listenAddr := startFlags.String("listen-address", "", "Bind address for the proxy server (default 127.0.0.1)")
 	telemetryEnabled := startFlags.Bool("telemetry", false, "Enable telemetry")
 	retentionDays := startFlags.Int("retention-days", 0, "Telemetry retention in days (0=use config default)")
-	blockMode := startFlags.String("block-mode", "", "Block mode: remove (delete tool calls) or replace (substitute with echo)")
+	blockMode := startFlags.String("block-mode", "", "Block mode: remove (delete tool calls) or replace (substitute with a text warning block)")
 
 	_ = startFlags.Parse(args)
 
@@ -414,7 +415,12 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 		cfg.Telemetry.RetentionDays = retentionDays
 	}
 	if blockMode != "" {
-		cfg.Security.BlockMode = types.BlockMode(blockMode)
+		parsed, err := types.ParseBlockMode(blockMode)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid --block-mode %q: must be 'remove' or 'replace'\n", blockMode)
+			os.Exit(1)
+		}
+		cfg.Security.BlockMode = parsed
 	}
 
 	// Validate config AFTER all CLI overrides have been applied
@@ -446,6 +452,7 @@ func runDaemon(cfg *config.Config, logLevel string, disableBuiltin bool, endpoin
 			UserRulesDir:        rulesDir,
 			DisableBuiltin:      cfg.Rules.DisableBuiltin,
 			SubprocessIsolation: true,
+			PreChecker:          selfprotect.Check,
 		}
 
 		ruleEngine, err := rules.NewEngine(engineCfg)
@@ -976,6 +983,7 @@ func loadEngine(name string, cf commonFlags, subprocessIsolation bool) *rules.En
 		UserRulesDir:        dir,
 		DisableBuiltin:      *cf.disableBuiltin || cfg.Rules.DisableBuiltin,
 		SubprocessIsolation: subprocessIsolation,
+		PreChecker:          selfprotect.Check,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crust %s: failed to init rules: %v\n", name, err)
@@ -1383,7 +1391,7 @@ func runDoctor(args []string) {
 			okCount++
 		case httpproxy.StatusAuthError:
 			warnCount++
-		default:
+		case httpproxy.StatusPathError, httpproxy.StatusConnError, httpproxy.StatusOtherError:
 			errCount++
 		}
 	}
@@ -1430,7 +1438,7 @@ func printDoctorResult(r httpproxy.DoctorResult) {
 	case httpproxy.StatusAuthError:
 		icon = tui.IconWarning
 		style = tui.StyleWarning
-	default:
+	case httpproxy.StatusPathError, httpproxy.StatusConnError, httpproxy.StatusOtherError:
 		icon = tui.IconCross
 		style = tui.StyleError
 	}

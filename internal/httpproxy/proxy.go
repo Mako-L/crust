@@ -169,7 +169,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Extract and sanitize telemetry headers
 	// SECURITY: Limit header lengths to prevent resource exhaustion
-	traceID := sanitizeHeader(r.Header.Get("X-Trace-Id"), maxTraceIDLen)
+	traceID := types.TraceID(sanitizeHeader(r.Header.Get("X-Trace-Id"), maxTraceIDLen))
 	spanName := sanitizeHeader(r.Header.Get("X-Span-Name"), maxSpanNameLen)
 	spanKind := sanitizeHeader(r.Header.Get("X-Span-Kind"), maxSpanKindLen)
 
@@ -181,7 +181,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if len(traceparent) <= 256 {
 				parts := strings.Split(traceparent, "-")
 				if len(parts) >= 2 && len(parts[1]) <= maxTraceIDLen {
-					traceID = parts[1]
+					traceID = types.TraceID(parts[1])
 				}
 			}
 		}
@@ -197,9 +197,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	copy(requestBody, parseBytes)
 
 	// Compute session ID from messages (system prompt + first user message)
-	sessionID := computeSessionID(reqBody.Messages)
-	if sessionID == "" {
-		sessionID = traceID // fallback to traceID if no messages
+	sessionID := types.SessionID(computeSessionID(reqBody.Messages))
+	if sessionID.IsEmpty() {
+		sessionID = types.SessionID(traceID) // fallback to traceID if no messages
 	}
 
 	// Strip /api prefix sent by some IDE clients before any
@@ -287,6 +287,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if tp != nil && tp.IsEnabled() && spanCtx != nil {
 			tp.EndLLMSpan(spanCtx, telemetry.LLMSpanData{
 				TraceID:    traceID,
+				SessionID:  sessionID,
 				Model:      reqBody.Model,
 				TargetURL:  targetURLStr,
 				Messages:   requestBody,
@@ -313,6 +314,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tp != nil && tp.IsEnabled() && spanCtx != nil {
 		tp.EndLLMSpan(spanCtx, telemetry.LLMSpanData{
 			TraceID:      traceID,
+			SessionID:    sessionID,
 			SpanKind:     spanKind,
 			SpanName:     spanName,
 			Model:        reqBody.Model,
@@ -452,7 +454,7 @@ func (p *Proxy) prepareUpstreamRequest(
 // and tool calls, and applies Layer 1 security interception.
 func processNonStreamingResponse(
 	resp *http.Response, apiType types.APIType,
-	traceID, sessionID, model string,
+	traceID types.TraceID, sessionID types.SessionID, model string,
 ) (responseBody []byte, inputTokens, outputTokens int64, toolCalls []telemetry.ToolCall) {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		inputTokens, outputTokens, responseBody = extractUsageAndBody(resp, apiType)
@@ -520,6 +522,7 @@ func (p *Proxy) handleStreamingRequest(ctx *RequestContext) {
 					if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
 						ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
 							TraceID:      ctx.TraceID,
+							SessionID:    ctx.SessionID,
 							SpanKind:     ctx.SpanKind,
 							SpanName:     ctx.SpanName,
 							Model:        ctx.Model,
@@ -544,6 +547,7 @@ func (p *Proxy) handleStreamingRequest(ctx *RequestContext) {
 			if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
 				ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
 					TraceID:    ctx.TraceID,
+					SessionID:  ctx.SessionID,
 					Model:      ctx.Model,
 					TargetURL:  ctx.TargetURL,
 					Messages:   ctx.RequestBody,
@@ -569,6 +573,7 @@ func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg secur
 		if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
 			ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
 				TraceID:    ctx.TraceID,
+				SessionID:  ctx.SessionID,
 				Model:      ctx.Model,
 				TargetURL:  ctx.TargetURL,
 				Messages:   ctx.RequestBody,
@@ -723,6 +728,7 @@ readLoop:
 	if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
 		ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
 			TraceID:     ctx.TraceID,
+			SessionID:   ctx.SessionID,
 			SpanKind:    ctx.SpanKind,
 			SpanName:    ctx.SpanName,
 			Model:       ctx.Model,
@@ -959,6 +965,8 @@ func extractUsageAndBody(resp *http.Response, apiType types.APIType) (inputToken
 	case types.APITypeOpenAICompletion:
 		inputTokens = respData.Usage.PromptTokens
 		outputTokens = respData.Usage.CompletionTokens
+	case types.APITypeUnknown:
+		// no usage data for unknown types
 	}
 
 	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -1043,6 +1051,9 @@ func extractToolCalls(bodyBytes []byte, apiType types.APIType) []telemetry.ToolC
 				}
 			}
 		}
+
+	case types.APITypeUnknown:
+		// no tool calls for unknown types
 	}
 
 	return toolCalls

@@ -247,8 +247,8 @@ CREATE INDEX IF NOT EXISTS idx_tool_call_logs_was_blocked ON tool_call_logs(was_
 // Trace represents a trace record (wraps db.Trace for compatibility)
 type Trace struct {
 	ID        int64           `json:"id"`
-	TraceID   string          `json:"trace_id"`
-	SessionID string          `json:"session_id,omitempty"`
+	TraceID   types.TraceID   `json:"trace_id"`
+	SessionID types.SessionID `json:"session_id,omitempty"`
 	StartTime time.Time       `json:"start_time"`
 	EndTime   time.Time       `json:"end_time"`
 	Metadata  json.RawMessage `json:"metadata,omitempty"`
@@ -259,8 +259,8 @@ type Trace struct {
 type Span struct {
 	ID            int64           `json:"id"`
 	TraceRowID    int64           `json:"trace_rowid"`
-	SpanID        string          `json:"span_id"`
-	ParentSpanID  string          `json:"parent_span_id,omitempty"`
+	SpanID        types.SpanID    `json:"span_id"`
+	ParentSpanID  types.SpanID    `json:"parent_span_id,omitempty"`
 	Name          string          `json:"name"`
 	SpanKind      string          `json:"span_kind"`
 	StartTime     time.Time       `json:"start_time"`
@@ -278,8 +278,8 @@ type Span struct {
 type ToolCallLog struct {
 	ID            int64           `json:"id"`
 	Timestamp     time.Time       `json:"timestamp"`
-	TraceID       string          `json:"trace_id"`
-	SessionID     string          `json:"session_id,omitempty"`
+	TraceID       types.TraceID   `json:"trace_id"`
+	SessionID     types.SessionID `json:"session_id,omitempty"`
 	ToolName      string          `json:"tool_name"`
 	ToolArguments json.RawMessage `json:"tool_arguments,omitempty"`
 	APIType       types.APIType   `json:"api_type"`
@@ -295,14 +295,14 @@ type ToolCallLog struct {
 
 // GetOrCreateTrace gets an existing trace or creates a new one.
 // Uses INSERT ... ON CONFLICT to avoid TOCTOU races between concurrent goroutines.
-func (s *Storage) GetOrCreateTrace(traceID string, sessionID string) (*Trace, error) {
+func (s *Storage) GetOrCreateTrace(traceID types.TraceID, sessionID types.SessionID) (*Trace, error) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
 	// Atomic upsert — no TOCTOU race
 	_, err := s.queries.UpsertTrace(ctx, db.UpsertTraceParams{
-		TraceID:   traceID,
-		SessionID: strPtr(sessionID),
+		TraceID:   traceID.String(),
+		SessionID: strPtr(sessionID.String()),
 		StartTime: &now,
 	})
 	if err != nil {
@@ -310,7 +310,7 @@ func (s *Storage) GetOrCreateTrace(traceID string, sessionID string) (*Trace, er
 	}
 
 	// Fetch the canonical row (may have been created by another goroutine)
-	dbTrace, err := s.queries.GetTraceByID(ctx, traceID)
+	dbTrace, err := s.queries.GetTraceByID(ctx, traceID.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get trace after upsert: %w", err)
 	}
@@ -319,11 +319,11 @@ func (s *Storage) GetOrCreateTrace(traceID string, sessionID string) (*Trace, er
 }
 
 // UpdateTraceEndTime updates the end time of a trace
-func (s *Storage) UpdateTraceEndTime(traceID string, endTime time.Time) error {
+func (s *Storage) UpdateTraceEndTime(traceID types.TraceID, endTime time.Time) error {
 	ctx := context.Background()
 	t := endTime.UTC()
 	return s.queries.UpdateTraceEndTime(ctx, db.UpdateTraceEndTimeParams{
-		TraceID: traceID,
+		TraceID: traceID.String(),
 		EndTime: &t,
 	})
 }
@@ -332,8 +332,8 @@ func (s *Storage) UpdateTraceEndTime(traceID string, endTime time.Time) error {
 func spanToInsertParams(span *Span) db.InsertSpanParams {
 	return db.InsertSpanParams{
 		TraceRowid:    int64Ptr(span.TraceRowID),
-		SpanID:        span.SpanID,
-		ParentSpanID:  strPtr(span.ParentSpanID),
+		SpanID:        span.SpanID.String(),
+		ParentSpanID:  strPtr(span.ParentSpanID.String()),
 		Name:          span.Name,
 		SpanKind:      strPtr(span.SpanKind),
 		StartTime:     timePtr(span.StartTime),
@@ -363,7 +363,7 @@ func (s *Storage) InsertSpan(span *Span) error {
 // RecordSpanTx atomically records a trace, main span, tool spans, and updates
 // the trace end time in a single transaction. This prevents partial writes
 // (e.g., trace without spans) if an error occurs mid-sequence.
-func (s *Storage) RecordSpanTx(traceID, sessionID string, mainSpan *Span, toolSpans []*Span) error {
+func (s *Storage) RecordSpanTx(traceID types.TraceID, sessionID types.SessionID, mainSpan *Span, toolSpans []*Span) error {
 	ctx := context.Background()
 
 	tx, err := s.conn.BeginTx(ctx, nil)
@@ -377,8 +377,8 @@ func (s *Storage) RecordSpanTx(traceID, sessionID string, mainSpan *Span, toolSp
 	// 1. Upsert trace
 	now := time.Now().UTC()
 	_, err = qtx.UpsertTrace(ctx, db.UpsertTraceParams{
-		TraceID:   traceID,
-		SessionID: strPtr(sessionID),
+		TraceID:   traceID.String(),
+		SessionID: strPtr(sessionID.String()),
 		StartTime: &now,
 	})
 	if err != nil {
@@ -386,7 +386,7 @@ func (s *Storage) RecordSpanTx(traceID, sessionID string, mainSpan *Span, toolSp
 	}
 
 	// Get trace rowid for span FK
-	dbTrace, err := qtx.GetTraceByID(ctx, traceID)
+	dbTrace, err := qtx.GetTraceByID(ctx, traceID.String())
 	if err != nil {
 		return fmt.Errorf("get trace: %w", err)
 	}
@@ -411,7 +411,7 @@ func (s *Storage) RecordSpanTx(traceID, sessionID string, mainSpan *Span, toolSp
 	// 4. Update trace end time
 	endTime := time.Now().UTC()
 	err = qtx.UpdateTraceEndTime(ctx, db.UpdateTraceEndTimeParams{
-		TraceID: traceID,
+		TraceID: traceID.String(),
 		EndTime: &endTime,
 	})
 	if err != nil {
@@ -422,10 +422,10 @@ func (s *Storage) RecordSpanTx(traceID, sessionID string, mainSpan *Span, toolSp
 }
 
 // GetTraceSpans returns all spans for a trace
-func (s *Storage) GetTraceSpans(traceID string) ([]Span, error) {
+func (s *Storage) GetTraceSpans(traceID types.TraceID) ([]Span, error) {
 	ctx := context.Background()
 
-	dbSpans, err := s.queries.GetTraceSpans(ctx, traceID)
+	dbSpans, err := s.queries.GetTraceSpans(ctx, traceID.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to query spans: %w", err)
 	}
@@ -515,12 +515,12 @@ func (s *Storage) GetTraceStats() (*TraceStats, error) {
 
 // SessionSummary holds aggregate stats for one conversation session.
 type SessionSummary struct {
-	SessionID    string    `json:"session_id"`
-	Model        string    `json:"model"`
-	TotalCalls   int64     `json:"total_calls"`
-	BlockedCalls int64     `json:"blocked_calls"`
-	FirstSeen    time.Time `json:"first_seen"`
-	LastSeen     time.Time `json:"last_seen"`
+	SessionID    types.SessionID `json:"session_id"`
+	Model        string          `json:"model"`
+	TotalCalls   int64           `json:"total_calls"`
+	BlockedCalls int64           `json:"blocked_calls"`
+	FirstSeen    time.Time       `json:"first_seen"`
+	LastSeen     time.Time       `json:"last_seen"`
 }
 
 // sqliteDateFormats lists the datetime formats SQLite uses for text-stored timestamps,
@@ -580,12 +580,14 @@ func (s *Storage) GetSessions(minutes int, limit int) ([]SessionSummary, error) 
 	var sessions []SessionSummary
 	for rows.Next() {
 		var ss SessionSummary
+		var sessionIDStr string
 		var model *string
 		// Aggregate functions (MIN/MAX) return strings in SQLite — scan as string, parse manually.
 		var firstSeenStr, lastSeenStr string
-		if err := rows.Scan(&ss.SessionID, &model, &ss.TotalCalls, &ss.BlockedCalls, &firstSeenStr, &lastSeenStr); err != nil {
+		if err := rows.Scan(&sessionIDStr, &model, &ss.TotalCalls, &ss.BlockedCalls, &firstSeenStr, &lastSeenStr); err != nil {
 			return nil, fmt.Errorf("failed to scan session row: %w", err)
 		}
+		ss.SessionID = types.SessionID(sessionIDStr)
 		ss.Model = derefStr(model)
 		ss.FirstSeen = parseSQLiteTime(firstSeenStr)
 		ss.LastSeen = parseSQLiteTime(lastSeenStr)
@@ -596,7 +598,7 @@ func (s *Storage) GetSessions(minutes int, limit int) ([]SessionSummary, error) 
 
 // GetSessionEvents returns the most recent tool call events for a specific session,
 // ordered newest-first.
-func (s *Storage) GetSessionEvents(sessionID string, limit int) ([]ToolCallLog, error) {
+func (s *Storage) GetSessionEvents(sessionID types.SessionID, limit int) ([]ToolCallLog, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -609,7 +611,7 @@ func (s *Storage) GetSessionEvents(sessionID string, limit int) ([]ToolCallLog, 
 		WHERE session_id = ?
 		ORDER BY timestamp DESC
 		LIMIT ?
-	`, sessionID, int64(limit))
+	`, sessionID.String(), int64(limit))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query session events: %w", err)
 	}
@@ -619,20 +621,25 @@ func (s *Storage) GetSessionEvents(sessionID string, limit int) ([]ToolCallLog, 
 	for rows.Next() {
 		var l ToolCallLog
 		var ts *time.Time
+		var traceIDStr, sessionIDStr string
 		var argsStr, apiType, blockedByRule, model, layer *string
 		var wasBlocked *bool
 		if err := rows.Scan(
-			&l.ID, &ts, &l.TraceID, &l.SessionID,
+			&l.ID, &ts, &traceIDStr, &sessionIDStr,
 			&l.ToolName, &argsStr, &apiType, &wasBlocked,
 			&blockedByRule, &model, &layer,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan log row: %w", err)
 		}
+		l.TraceID = types.TraceID(traceIDStr)
+		l.SessionID = types.SessionID(sessionIDStr)
 		l.Timestamp = derefTime(ts)
 		if argsStr != nil {
 			l.ToolArguments = json.RawMessage(*argsStr)
 		}
-		l.APIType = types.APIType(derefStr(apiType))
+		if parsed, err := types.ParseAPIType(derefStr(apiType)); err == nil {
+			l.APIType = parsed
+		}
 		l.WasBlocked = derefBool(wasBlocked)
 		l.BlockedByRule = derefStr(blockedByRule)
 		l.Model = derefStr(model)
@@ -662,11 +669,11 @@ func (s *Storage) LogToolCall(toolLog ToolCallLog) error {
 	}
 
 	return s.queries.LogToolCall(ctx, db.LogToolCallParams{
-		TraceID:       toolLog.TraceID,
-		SessionID:     strPtr(toolLog.SessionID),
+		TraceID:       toolLog.TraceID.String(),
+		SessionID:     strPtr(toolLog.SessionID.String()),
 		ToolName:      toolLog.ToolName,
 		ToolArguments: argsStr,
-		ApiType:       strPtr(string(toolLog.APIType)),
+		ApiType:       strPtr(toolLog.APIType.String()),
 		WasBlocked:    &toolLog.WasBlocked,
 		BlockedByRule: strPtr(toolLog.BlockedByRule),
 		Model:         strPtr(toolLog.Model),
@@ -832,8 +839,8 @@ func derefBool(b *bool) bool {
 func dbTraceToTrace(t *db.Trace) *Trace {
 	return &Trace{
 		ID:        t.ID,
-		TraceID:   t.TraceID,
-		SessionID: derefStr(t.SessionID),
+		TraceID:   types.TraceID(t.TraceID),
+		SessionID: types.SessionID(derefStr(t.SessionID)),
 		StartTime: derefTime(t.StartTime),
 		EndTime:   derefTime(t.EndTime),
 		Metadata:  t.Metadata,
@@ -845,8 +852,8 @@ func dbSpanToSpan(s *db.Span) Span {
 	return Span{
 		ID:            s.ID,
 		TraceRowID:    derefInt64(s.TraceRowid),
-		SpanID:        s.SpanID,
-		ParentSpanID:  derefStr(s.ParentSpanID),
+		SpanID:        types.SpanID(s.SpanID),
+		ParentSpanID:  types.SpanID(derefStr(s.ParentSpanID)),
 		Name:          s.Name,
 		SpanKind:      derefStr(s.SpanKind),
 		StartTime:     derefTime(s.StartTime),
@@ -870,11 +877,16 @@ func dbToolCallLogToToolCallLog(l *db.ToolCallLog) ToolCallLog {
 	return ToolCallLog{
 		ID:            l.ID,
 		Timestamp:     derefTime(l.Timestamp),
-		TraceID:       l.TraceID,
-		SessionID:     derefStr(l.SessionID),
+		TraceID:       types.TraceID(l.TraceID),
+		SessionID:     types.SessionID(derefStr(l.SessionID)),
 		ToolName:      l.ToolName,
 		ToolArguments: args,
-		APIType:       types.APIType(derefStr(l.ApiType)),
+		APIType: func() types.APIType {
+			if parsed, err := types.ParseAPIType(derefStr(l.ApiType)); err == nil {
+				return parsed
+			}
+			return types.APITypeUnknown
+		}(),
 		WasBlocked:    derefBool(l.WasBlocked),
 		BlockedByRule: derefStr(l.BlockedByRule),
 		Model:         derefStr(l.Model),

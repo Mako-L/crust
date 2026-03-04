@@ -25,8 +25,8 @@ type RequestContext struct {
 	StartTime time.Time
 
 	// Tracing identifiers
-	TraceID   string
-	SessionID string
+	TraceID   types.TraceID
+	SessionID types.SessionID
 	SpanName  string
 	SpanKind  string
 

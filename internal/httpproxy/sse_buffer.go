@@ -12,7 +12,6 @@ import (
 	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/security"
-	"github.com/BakeLens/crust/internal/selfprotect"
 	"github.com/BakeLens/crust/internal/shellutil"
 	"github.com/BakeLens/crust/internal/telemetry"
 	"github.com/BakeLens/crust/internal/types"
@@ -47,8 +46,8 @@ type BufferedSSEWriter struct {
 	timeout         time.Duration
 
 	// Metadata for security evaluation
-	traceID   string
-	sessionID string
+	traceID   types.TraceID
+	sessionID types.SessionID
 	model     string
 	apiType   types.APIType
 
@@ -63,7 +62,7 @@ type BufferedSSEWriter struct {
 }
 
 // NewBufferedSSEWriter creates a buffered SSE writer
-func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID, sessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
+func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
 	flusher, _ := w.(http.Flusher)
 
 	// Build tool lookup map
@@ -232,16 +231,10 @@ func (b *BufferedSSEWriter) FlushModified(interceptor *security.Interceptor, blo
 	useReplaceMode := blockMode.IsReplace()
 
 	for idx, tc := range b.toolCalls {
-		// Self-protection pre-check: block management API/socket access before rule engine.
-		var matchResult rules.MatchResult
-		if m := selfprotect.Check(tc.Arguments.String()); m != nil {
-			matchResult = *m
-		} else {
-			matchResult = engine.Evaluate(rules.ToolCall{
-				Name:      tc.Name,
-				Arguments: json.RawMessage(tc.Arguments.Bytes()),
-			})
-		}
+		matchResult := engine.Evaluate(rules.ToolCall{
+			Name:      tc.Name,
+			Arguments: json.RawMessage(tc.Arguments.Bytes()),
+		})
 
 		isBlocked := matchResult.Matched && matchResult.Action == rules.ActionBlock
 		ruleName := ""
@@ -309,8 +302,10 @@ func (b *BufferedSSEWriter) flushFilteredEvents(blockedIndices, replacedIndices 
 		return b.flushFilteredOpenAIEvents(blockedIndices, replacedIndices, blockedCalls)
 	case types.APITypeOpenAIResponses:
 		return b.flushFilteredOpenAIResponsesEvents(blockedIndices, replacedIndices, blockedCalls)
-	default:
+	case types.APITypeUnknown:
 		return b.flushEventsUnlocked()
+	default:
+		panic("unhandled types.APIType: " + b.apiType.String())
 	}
 }
 
@@ -460,8 +455,10 @@ func (b *BufferedSSEWriter) injectWarning(blockedCalls []security.BlockedToolCal
 		return b.injectOpenAIWarning(blockedCalls)
 	case types.APITypeOpenAIResponses:
 		return b.injectOpenAIResponsesWarning(blockedCalls)
-	default:
+	case types.APITypeUnknown:
 		return nil
+	default:
+		panic("unhandled types.APIType: " + b.apiType.String())
 	}
 }
 

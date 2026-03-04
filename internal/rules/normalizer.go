@@ -79,7 +79,7 @@ func (n *Normalizer) Normalize(path string) string {
 	// SECURITY: Strip null bytes — C-level syscalls truncate at \x00,
 	// so "/etc/passwd\x00.txt" would access "/etc/passwd" while bypassing
 	// pattern matching on the full string.
-	path = strings.ReplaceAll(path, "\x00", "")
+	path = stripNullBytes(path)
 	if path == "" {
 		return ""
 	}
@@ -95,11 +95,6 @@ func (n *Normalizer) Normalize(path string) string {
 	// Normalize path separators: both \ and / are valid on Windows.
 	// Convert to forward slashes early so all subsequent checks (~/,  ./, etc.) work.
 	path = pathutil.ToSlash(path)
-
-	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
-	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
-	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
-	path = stripADS(path)
 
 	// SECURITY: Sanitize invalid UTF-8 before NFKC — invalid bytes (e.g., 0xF5)
 	// can corrupt NFKC processing of subsequent valid runes, breaking idempotency.
@@ -140,6 +135,14 @@ func (n *Normalizer) Normalize(path string) string {
 
 	// Step 4: Convert relative paths to absolute
 	path = n.makeAbsolute(path)
+
+	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
+	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
+	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
+	// Runs AFTER makeAbsolute so drive letter detection is unambiguous:
+	// bare "A:" in a relative path becomes "/cwd/A:" where the colon is
+	// clearly an ADS marker, not a drive separator.
+	path = stripADS(path)
 
 	// Step 4.5: Resolve well-known symlinks BEFORE path cleaning so that
 	// ".." traversals resolve correctly (e.g., /dev/fd/../environ →
@@ -191,6 +194,76 @@ func (n *Normalizer) NormalizeAll(paths []string) []string {
 	return result
 }
 
+// PreparePaths runs the path preparation pipeline (evaluation step 8):
+// filter bare shell globs → normalize → expand filesystem globs.
+func (n *Normalizer) PreparePaths(paths []string) []string {
+	paths = filterShellGlobs(paths)
+	paths = n.NormalizeAll(paths)
+	paths = expandFileGlobs(paths)
+	return paths
+}
+
+// expandFileGlobs expands paths containing glob metacharacters against the
+// real filesystem. Non-glob paths pass through unchanged.
+//
+// SECURITY: If a glob matches no files, the raw path is kept so the rule
+// matcher can still detect malicious intent (e.g., "bat ~/.ssh/id_*00"
+// targets SSH keys even if the glob resolves to nothing on disk).
+func expandFileGlobs(paths []string) []string {
+	fs := pathutil.DefaultFS()
+	result := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !containsGlob(p) {
+			result = append(result, p)
+			continue
+		}
+		matches, err := filepath.Glob(p)
+		if err != nil || len(matches) == 0 {
+			result = append(result, p)
+			continue
+		}
+		// SECURITY: filepath.Glob returns canonical casing from the filesystem.
+		// On case-insensitive APFS, re-lower to match the normalizer's lowering.
+		for _, m := range matches {
+			result = append(result, fs.Lower(pathutil.ToSlash(m)))
+		}
+	}
+	return result
+}
+
+// filterShellGlobs removes bare shell glob patterns from a path list.
+// The shell parser may extract glob patterns (e.g., "*" from "<*" redirections)
+// that are not real paths. A bare "*" normalized to "/cwd/*" falsely matches
+// protected glob patterns like "**/.env".
+func filterShellGlobs(paths []string) []string {
+	result := paths[:0] // reuse backing array
+	for _, p := range paths {
+		if isShellGlob(p) {
+			continue
+		}
+		result = append(result, p)
+	}
+	return result
+}
+
+// isShellGlob returns true if the path is a bare shell glob pattern
+// (no path separators) that should not be treated as a real file path.
+func isShellGlob(p string) bool {
+	if p == "" {
+		return false
+	}
+	if strings.ContainsRune(p, '/') || strings.ContainsRune(p, '\\') {
+		return false
+	}
+	for _, r := range p {
+		switch r {
+		case '*', '?', '[':
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizePattern normalizes a glob pattern for profile generation.
 // Unlike Normalize(), it does NOT convert relative paths to absolute or run
 // pathutil.CleanPath, which would destroy glob syntax like ** and *.
@@ -200,7 +273,7 @@ func (n *Normalizer) NormalizePattern(pattern string) string {
 	if pattern == "" {
 		return ""
 	}
-	pattern = strings.ReplaceAll(pattern, "\x00", "")
+	pattern = stripNullBytes(pattern)
 	if pattern == "" {
 		return ""
 	}
@@ -504,7 +577,7 @@ func stripADS(p string) string {
 	// Process each path segment, stripping everything after the first colon.
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
-		// Skip empty segments and drive letter (first segment like "C:")
+		// Skip drive letter segment (e.g., "C:") when it's a path prefix.
 		if i == 0 && len(part) == 2 && part[1] == ':' && pathutil.IsDriverLetter(part[0]) {
 			continue
 		}

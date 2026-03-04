@@ -22,10 +22,15 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.13'
+          go-version-file: go.mod
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
+
+      - name: go fix (check for pending modernizations)
+        run: |
+          go fix ./...
+          git diff --exit-code || { echo "go fix found pending modernizations — run 'go fix ./...' locally and commit the changes"; exit 1; }
 
       - name: govulncheck
         run: |
@@ -46,7 +51,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.13'
+          go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
         run: go install github.com/zricethezav/gitleaks/v8@latest
@@ -108,7 +113,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.13'
+          go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
         run: go install github.com/zricethezav/gitleaks/v8@latest
@@ -130,42 +135,58 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-  # macOS and FreeBSD run only on main to reduce CI costs (macOS is 10x billing).
+  # macOS and FreeBSD full tests run only on main to reduce CI costs (macOS is 10x billing).
+  # The jobs always complete (SUCCESS) so they can be listed as required status checks;
+  # the expensive steps are skipped on non-main branches.
   test-expensive:
     name: Go Test (${{ matrix.os }})
-    if: github.ref == 'refs/heads/main'
     needs: [lint-go]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.ref == 'refs/heads/main' && matrix.os || 'ubuntu-latest' }}
     strategy:
       matrix:
         os: [macos-latest]
     steps:
+      - name: Skip on non-main branches
+        if: github.ref != 'refs/heads/main'
+        run: echo "macOS tests run on main only — skipping to reduce CI costs"
+
       - uses: actions/checkout@v4
+        if: github.ref == 'refs/heads/main'
 
       - uses: actions/setup-go@v5
+        if: github.ref == 'refs/heads/main'
         with:
-          go-version: '1.24.13'
+          go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
+        if: github.ref == 'refs/heads/main'
         run: go install github.com/zricethezav/gitleaks/v8@latest
 
       - name: Build
+        if: github.ref == 'refs/heads/main'
         run: go build ./...
 
       - name: Build (notui)
+        if: github.ref == 'refs/heads/main'
         run: go build -tags notui ./...
 
       - name: Unit tests (with race detector)
+        if: github.ref == 'refs/heads/main'
         run: go test -race -short ./...
 
   test-freebsd:
     name: Go Test (FreeBSD)
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - name: Skip on non-main branches
+        if: github.ref != 'refs/heads/main'
+        run: echo "FreeBSD tests run on main only — skipping to reduce CI costs"
+
       - uses: actions/checkout@v4
+        if: github.ref == 'refs/heads/main'
 
       - uses: vmactions/freebsd-vm@v1
+        if: github.ref == 'refs/heads/main'
         with:
           release: '15.0'
           usesh: true
@@ -186,7 +207,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.13'
+          go-version-file: go.mod
 
       - uses: actions/setup-node@v4
         with:

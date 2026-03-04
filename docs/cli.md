@@ -20,7 +20,11 @@ crust remove-rule FILE                      # Remove user rules
 crust reload-rules                          # Force reload all rules
 crust lint-rules [FILE]                     # Validate rule syntax
 
-# ACP Proxy (see [ACP setup guide](acp.md))
+# MCP / ACP Proxies (see [MCP setup guide](mcp.md), [ACP setup guide](acp.md))
+crust mcp gateway [flags] -- <cmd...>       # MCP stdio proxy with security rules
+crust mcp http --upstream URL [flags]       # MCP HTTP reverse proxy
+crust mcp discover [--patch] [--restore]    # Scan/patch IDE MCP configs
+crust wrap [flags] -- <cmd...>              # Auto-detect MCP or ACP (stdio)
 crust acp-wrap [flags] -- <cmd...>          # ACP stdio proxy with security rules
 
 # Diagnostics
@@ -42,13 +46,15 @@ crust uninstall                             # Complete removal
 | `--api-key KEY` | API key (prefer `LLM_API_KEY` env var) |
 | `--foreground` | Run in foreground (for Docker/containers) |
 | `--listen-address ADDR` | Bind address (default `127.0.0.1`, use `0.0.0.0` for Docker) |
-| `--block-mode MODE` | `remove` (delete tool calls) or `replace` (echo) |
+| `--block-mode MODE` | `remove` (delete tool calls) or `replace` (substitute with a text warning block) |
 | `--no-color` | Disable colored output |
 | `--proxy-port PORT` | Proxy server port (default from config) |
 | `--log-level LEVEL` | `trace`, `debug`, `info`, `warn`, `error` |
 | `--telemetry` | Enable telemetry |
 | `--retention-days N` | Telemetry retention in days (0=forever) |
 | `--db-key KEY` | Database encryption key (prefer `DB_KEY` env var) |
+| `--config PATH` | Path to configuration file |
+| `--disable-builtin` | Disable builtin security rules (locked rules remain active) |
 
 ## Status / List-Rules Flags
 
@@ -72,7 +78,7 @@ crust uninstall                             # Complete removal
 | `--config PATH` | Path to configuration file |
 | `--log-level LEVEL` | `trace`, `debug`, `info`, `warn` (default), `error` |
 | `--rules-dir DIR` | Override user rules directory |
-| `--disable-builtin` | Disable builtin security rules (14 locked rules remain active) |
+| `--disable-builtin` | Disable builtin security rules (19 locked rules remain active) |
 
 ## Environment Variables
 

@@ -49,7 +49,12 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: >
           go build
-          -ldflags "-X main.Version=${{ github.ref_name }}"
+          -ldflags "
+            -s -w
+            -X main.Version=${{ github.ref_name }}
+            -X main.Commit=${{ github.sha }}
+            -X main.BuildDate=${{ github.event.head_commit.timestamp }}
+          "
           -o ${{ matrix.asset }}
           .
 
@@ -69,9 +74,17 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ./* > sha256sums.txt
+          cat sha256sums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*
+            dist/sha256sums.txt
           generate_release_notes: false
           draft: true

@@ -48,8 +48,16 @@ import (
 	"golang.org/x/term"
 )
 
-// Version is set at build time via ldflags: -X main.Version=x.y.z
-var Version = "dev"
+// Build metadata — injected via ldflags at release time:
+//
+//	-X main.Version=v3.0.0
+//	-X main.Commit=abc1234
+//	-X main.BuildDate=2026-03-04T12:00:00Z
+var (
+	Version   = "dev"
+	Commit    = "none"
+	BuildDate = "unknown"
+)
 
 var log = logger.New("main")
 
@@ -685,12 +693,17 @@ func runVersion(args []string) {
 	_ = versionFlags.Parse(args)
 
 	if *jsonOutput {
-		out, _ := json.MarshalIndent(map[string]string{"version": Version}, "", "  ") //nolint:errcheck // marshal of map won't fail
+		out, _ := json.MarshalIndent(map[string]string{ //nolint:errcheck // marshal of map won't fail
+			"version":    Version,
+			"commit":     Commit,
+			"build_date": BuildDate,
+		}, "", "  ")
 		fmt.Println(string(out))
 		return
 	}
 
 	banner.PrintBanner(Version)
+	fmt.Printf("commit %s  built %s\n", Commit, BuildDate)
 }
 
 // runLogs handles the logs subcommand
@@ -1461,7 +1474,7 @@ func buildDoctorReport(results []httpproxy.DoctorResult, okCount, warnCount, err
 	var sb strings.Builder
 	sb.WriteString("## Crust Doctor Report\n\n")
 	sb.WriteString("```\n")
-	fmt.Fprintf(&sb, "Version: %s\n", Version)
+	fmt.Fprintf(&sb, "Version: %s (commit %s, built %s)\n", Version, Commit, BuildDate)
 	fmt.Fprintf(&sb, "OS:      %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(&sb, "Go:      %s\n", runtime.Version())
 	fmt.Fprintf(&sb, "Summary: %d ok, %d auth, %d error\n\n", okCount, warnCount, errCount)

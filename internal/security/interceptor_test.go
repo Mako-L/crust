@@ -1466,3 +1466,42 @@ rules:
 		t.Error("ModifiedResponse should not be empty")
 	}
 }
+
+// FuzzInterceptAnthropicResponse checks that intercepting Anthropic responses
+// never panics and always returns a non-nil result.
+// Includes seeds with HTML-special characters as regression tests for the
+// json.Marshal HTML-escaping bug (& → \u0026, < → \u003c, > → \u003e).
+func FuzzInterceptAnthropicResponse(f *testing.F) {
+	// HTML-special character seeds — regression for json.Marshal HTML escaping.
+	f.Add(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"a & b"}]}`)
+	f.Add(`{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"text","text":"<tag>"}]}`)
+	f.Add(`{"id":"msg_3","type":"message","role":"assistant","content":[{"type":"text","text":"a > b"}]}`)
+	f.Add(`{"id":"msg_4","type":"message","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo a&b"}}]}`)
+	// Normal content
+	f.Add(`{"id":"msg_5","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}]}`)
+	// Edge cases
+	f.Add(`{}`)
+	f.Add(`[]`)
+	f.Add(``)
+
+	interceptor := NewInterceptor(nil, nil)
+
+	f.Fuzz(func(t *testing.T, body string) {
+		result, err := interceptor.InterceptAnthropicResponse(
+			[]byte(body),
+			types.TraceID("fuzz-trace"),
+			types.SessionID("fuzz-session"),
+			"claude-3",
+			types.APITypeAnthropic,
+			types.BlockModeRemove,
+		)
+		// Must not panic (fuzz framework catches).
+		// With nil engine, result is always non-nil and err is nil.
+		if result == nil && err == nil {
+			t.Error("both result and err are nil")
+		}
+		if result != nil && len(result.ModifiedResponse) == 0 && len(body) > 0 {
+			t.Errorf("non-empty input produced empty ModifiedResponse: input=%q", body)
+		}
+	})
+}

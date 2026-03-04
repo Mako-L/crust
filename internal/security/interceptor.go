@@ -1,6 +1,7 @@
 package security
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync/atomic"
 
@@ -90,11 +91,14 @@ func (i *Interceptor) intercept(
 		result.ModifiedResponse = responseBody
 		return result, nil
 	}
-	b, err := json.Marshal(resp)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(resp); err != nil {
 		return &InterceptionResult{ModifiedResponse: responseBody}, err
 	}
-	result.ModifiedResponse = b
+	b := buf.Bytes()
+	result.ModifiedResponse = b[:len(b)-1] // strip trailing newline from json.Encoder
 	return result, nil
 }
 

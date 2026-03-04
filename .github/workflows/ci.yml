@@ -127,6 +127,32 @@ jobs:
       - name: Unit tests (with race detector and coverage)
         run: go test -race -short -coverprofile coverage.out -covermode atomic ./...
 
+      - name: PSScriptAnalyzer — lint pwsh bootstrap script (Windows only)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+          # Extract the bootstrap script from the Go raw string literal.
+          # Normalize CRLF→LF first: Go files are checked out with CRLF on Windows,
+          # which breaks the \n anchors. Single-quoted regex: backtick is literal.
+          $src = (Get-Content 'internal\rules\pwshworker.go' -Raw) -replace '\r\n', "`n"
+          $m = [regex]::Match($src, '(?s)psBootstrapScript\s*=\s*`\n([\s\S]+?)\n`')
+          if (-not $m.Success) { Write-Error 'Could not extract psBootstrapScript'; exit 1 }
+          $tmp = [IO.Path]::ChangeExtension([IO.Path]::GetTempFileName(), '.ps1')
+          # Write with UTF-8 BOM — PS 7 Set-Content omits BOM by default,
+          # which triggers PSUseBOMForUnicodeEncodedFile on non-ASCII chars.
+          [System.IO.File]::WriteAllText($tmp, $m.Groups[1].Value, [System.Text.UTF8Encoding]::new($true))
+          $results = Invoke-ScriptAnalyzer -Path $tmp -Severity Warning,Error
+          Remove-Item $tmp -ErrorAction SilentlyContinue
+          if ($results) { $results | Format-Table; exit 1 }
+          Write-Host 'PSScriptAnalyzer: no issues'
+
+      - name: PS worker fuzz tests (Windows only — pwsh is available on windows-latest)
+        if: matrix.os == 'windows-latest'
+        run: |
+          go test ./internal/rules/... -fuzz=FuzzPSWorker_NoCrash -fuzztime=30s -short
+          go test ./internal/rules/... -fuzz=FuzzExtractor_PSCommand -fuzztime=30s -short
+
 
   # macOS and FreeBSD full tests run only on main to reduce CI costs (macOS is 10x billing).
   # The jobs always complete (SUCCESS) so they can be listed as required status checks;

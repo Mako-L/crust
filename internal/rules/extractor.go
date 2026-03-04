@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -144,9 +145,10 @@ func fieldStrings(val any) []string {
 
 // Extractor extracts paths and operations from tool calls
 type Extractor struct {
-	commandDB map[string]CommandInfo
-	env       map[string]string // process environment for shell expansion
-	worker    *shellWorker      // nil if subprocess isolation is disabled
+	commandDB  map[string]CommandInfo
+	env        map[string]string // process environment for shell expansion
+	worker     *shellWorker      // nil if subprocess isolation is disabled
+	pwshWorker *pwshWorker       // nil on non-Windows or if pwsh not found
 }
 
 // EnableSubprocessIsolation starts a worker subprocess for crash-isolated
@@ -162,11 +164,29 @@ func (e *Extractor) EnableSubprocessIsolation(exePath string) error {
 	return nil
 }
 
+// EnablePSWorker starts a persistent pwsh subprocess for accurate PowerShell
+// command analysis. pwshPath must be the path to pwsh.exe or powershell.exe.
+// Only call this on Windows — the subprocess is real, not a no-op. The call
+// site in engine.go is gated behind runtime.GOOS == "windows". Falls back to
+// the heuristic PS transform if this method is not called or returns an error.
+func (e *Extractor) EnablePSWorker(pwshPath string) error {
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		return err
+	}
+	e.pwshWorker = w
+	return nil
+}
+
 // Close cleans up resources. Call when the Extractor is no longer needed.
 func (e *Extractor) Close() {
 	if e.worker != nil {
 		e.worker.stop()
 		e.worker = nil
+	}
+	if e.pwshWorker != nil {
+		e.pwshWorker.stop()
+		e.pwshWorker = nil
 	}
 }
 
@@ -915,20 +935,26 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 			info.EvasiveReason = "blocked: " + strings.Join(reasons, ", ") + ": " + cmd
 		}
 
-		// Pre-process PowerShell commands before bash parsing:
-		// 1. Substitute $var references with their assigned values
-		// 2. Normalize Windows backslash paths to forward slashes
-		// This prevents the bash parser from mangling PS-specific syntax.
-		if looksLikePowerShell(cmd) {
+		// When the pwsh worker is available (Windows), use dual-parse:
+		// bash parser + PS native AST. The heuristic transform (substitutePSVariables
+		// + normalizePSBackslashPaths) is the fallback when pwsh is not available.
+		if runtime.GOOS == goosWindows && e.pwshWorker == nil && looksLikePowerShell(cmd) {
 			cmd = substitutePSVariables(cmd)
 			cmd = normalizePSBackslashPaths(cmd)
 		}
-
 		file, err := parser.Parse(strings.NewReader(cmd), "")
 		if err != nil {
-			// Unparseable non-empty commands are treated as evasive: the rule
-			// engine cannot analyze what it cannot parse, so blocking is the
-			// safe default to prevent bypass via malformed shell syntax.
+			// Bash parse failed. On Windows, try the pwsh worker as the authoritative
+			// PS parser — the command may be valid PowerShell even if bash rejects it.
+			if e.pwshWorker != nil {
+				if psResp, psErr := e.pwshWorker.parse(cmd); psErr == nil && len(psResp.ParseErrors) == 0 && len(psResp.Commands) > 0 {
+					e.extractFromParsedCommandsDepth(info, psResp.Commands, 0, nil)
+					printed = append(printed, strings.TrimSpace(cmd))
+					continue
+				}
+			}
+			// Unparseable as bash, and either no pwsh worker or pwsh also
+			// rejected it (parse errors) or returned no commands: treat as evasive.
 			info.Evasive = true
 			info.EvasiveReason = "unparseable shell command: " + err.Error()
 			printed = append(printed, strings.TrimSpace(cmd))
@@ -983,6 +1009,26 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 			if len(fallback) > 0 {
 				e.extractFromParsedCommandsDepth(info, fallback, 0, symtab)
 			}
+		}
+
+		// Dual-parse augmentation: on Windows, also run the PS worker to extract
+		// paths that the bash parser misses (e.g. $var-substituted paths, backslash
+		// paths that bash normalises away). Results are merged into info — paths and
+		// hosts accumulate, operation takes the highest-severity value.
+		// Gated on looksLikePowerShell to avoid unnecessary IPC round-trips and
+		// duplicate path entries for plain bash commands.
+		if e.pwshWorker != nil && looksLikePowerShell(cmd) {
+			psResp, psErr := e.pwshWorker.parse(cmd)
+			if psErr != nil {
+				// IPC failure means the PS subprocess crashed while parsing this
+				// command. That is suspicious for a PS-looking command — block it
+				// rather than silently ignoring the analysis gap.
+				info.Evasive = true
+				info.EvasiveReason = "pwsh worker crashed parsing command: " + psErr.Error()
+			} else if len(psResp.ParseErrors) == 0 && len(psResp.Commands) > 0 {
+				e.extractFromParsedCommandsDepth(info, psResp.Commands, 0, nil)
+			}
+			// If psResp.ParseErrors != 0: command is invalid PS but valid bash — allow.
 		}
 	}
 
@@ -1080,7 +1126,8 @@ var winBackslashPathRe = regexp.MustCompile(`(?:[A-Za-z]:\\|\\\\)(?:[a-zA-Z0-9_.
 var psVarAssignRe = regexp.MustCompile(`\$([a-zA-Z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s;|]+))`)
 
 // looksLikePowerShell returns true if the command string appears to contain
-// PowerShell syntax: Verb-Noun cmdlets or PS-style $var= assignments.
+// PowerShell syntax: Verb-Noun cmdlets, PS-style $var= assignments,
+// the call operator (&), or .NET static method calls ([System.).
 func looksLikePowerShell(cmd string) bool {
 	fields := strings.FieldsFunc(cmd, func(r rune) bool {
 		return r == '|' || r == ';' || r == ' ' || r == '\t'
@@ -1088,7 +1135,16 @@ func looksLikePowerShell(cmd string) bool {
 	if slices.ContainsFunc(fields, isPowerShellCmdlet) {
 		return true
 	}
-	return psVarAssignRe.MatchString(cmd)
+	if psVarAssignRe.MatchString(cmd) {
+		return true
+	}
+	// Call operator: & "executable" or & { scriptblock }
+	trimmed := strings.TrimSpace(cmd)
+	if strings.HasPrefix(trimmed, "& ") || strings.HasPrefix(trimmed, "&{") {
+		return true
+	}
+	// .NET static method invocation: [System. or [Microsoft.
+	return strings.Contains(cmd, "[System.") || strings.Contains(cmd, "[Microsoft.")
 }
 
 // normalizePSBackslashPaths converts Windows backslash paths to forward slashes
@@ -1187,7 +1243,15 @@ func (e *Extractor) parsePowerShellInnerCommand(info *ExtractedInfo, innerCmd st
 		return
 	}
 
-	// Attempt 2: regex heuristic extraction from the raw string
+	// Attempt 2: pwsh worker — authoritative PS AST parser (Windows only).
+	if e.pwshWorker != nil {
+		if psResp, psErr := e.pwshWorker.parse(innerCmd); psErr == nil && len(psResp.ParseErrors) == 0 && len(psResp.Commands) > 0 {
+			e.extractFromParsedCommandsDepth(info, psResp.Commands, depth+1, nil)
+			return
+		}
+	}
+
+	// Attempt 3: regex heuristic extraction from the raw string
 	paths := extractPathsFromInterpreterCode(innerCmd)
 	paths = append(paths, unquotedAbsPathRe.FindAllString(innerCmd, -1)...)
 	hosts := extractHosts(strings.Fields(innerCmd))
@@ -1199,7 +1263,7 @@ func (e *Extractor) parsePowerShellInnerCommand(info *ExtractedInfo, innerCmd st
 		return
 	}
 
-	// Attempt 3: flag as evasive — we can't analyze the inner command
+	// Attempt 4: flag as evasive — we can't analyze the inner command
 	info.Evasive = true
 	info.EvasiveReason = "PowerShell command is too complex to verify as safe: " + innerCmd
 }
@@ -1241,7 +1305,10 @@ func extractFlagValue(args []string, flag string) string {
 	return ""
 }
 
-const maxShellRecursionDepth = 3
+const (
+	maxShellRecursionDepth = 3
+	goosWindows            = "windows"
+)
 
 func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands []parsedCommand, depth int, parentSymtab map[string]string) {
 	for cmdIdx, pc := range commands {

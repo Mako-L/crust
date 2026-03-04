@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset: crust-linux-amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset: crust-linux-arm64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            asset: crust-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            asset: crust-darwin-arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            asset: crust-windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: >
+          go build
+          -ldflags "
+            -s -w
+            -X main.Version=${{ github.ref_name }}
+            -X main.Commit=${{ github.sha }}
+            -X main.BuildDate=${{ github.event.head_commit.timestamp }}
+          "
+          -o ${{ matrix.asset }}
+          .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ./* > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            dist/sha256sums.txt
+          generate_release_notes: false
+          draft: true

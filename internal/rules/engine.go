@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -181,6 +182,18 @@ func NewEngineWithNormalizer(cfg EngineConfig, normalizer *Normalizer) (*Engine,
 			if err := e.extractor.EnableSubprocessIsolation(exe); err != nil {
 				log.Warn("Shell worker failed to start (falling back to in-process): %v", err)
 			}
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		// Windows 10/11 always ships powershell.exe (5.1); pwsh.exe (7+) is
+		// optional. FindPwsh() should always succeed on supported platforms.
+		if pwshPath, ok := FindPwsh(); ok {
+			if err := e.extractor.EnablePSWorker(pwshPath); err != nil {
+				log.Warn("PS worker failed to start (falling back to heuristic PS transform): %v", err)
+			}
+		} else {
+			log.Warn("powershell.exe not found — PS analysis degraded (unsupported Windows configuration)")
 		}
 	}
 

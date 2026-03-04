@@ -17,6 +17,32 @@ import (
 	"github.com/BakeLens/crust/internal/types"
 )
 
+// bufferState tracks the lifecycle of a BufferedSSEWriter.
+type bufferState int
+
+const (
+	bufferStateActive    bufferState = iota // zero value; buffering in progress
+	bufferStateCompleted                    // FlushAll or FlushModified called
+	bufferStateTimedOut                     // timeout exceeded; buffer rejected
+)
+
+// SSE event type strings for Anthropic and OpenAI Responses APIs.
+const (
+	// Anthropic streaming event types.
+	sseContentBlockStart = "content_block_start"
+	sseContentBlockDelta = "content_block_delta"
+	sseContentBlockStop  = "content_block_stop"
+	sseMessageStop       = "message_stop"
+
+	// OpenAI Responses API streaming event types.
+	sseResponseOutputItemAdded            = "response.output_item.added"
+	sseResponseFunctionCallArgumentsDelta = "response.function_call_arguments.delta"
+	sseResponseFunctionCallArgumentsDone  = "response.function_call_arguments.done"
+	sseResponseOutputItemDone             = "response.output_item.done"
+	sseResponseCompleted                  = "response.completed"
+	sseResponseOutputTextDelta            = "response.output_text.delta"
+)
+
 // SSEEvent represents a buffered SSE event
 type SSEEvent struct {
 	EventType string // "message_start", "content_block_start", etc.
@@ -28,6 +54,21 @@ type SSEEvent struct {
 type AvailableTool struct {
 	Name        string
 	InputSchema json.RawMessage // The full schema for input validation
+}
+
+// SSEBufferConfig controls buffering behavior.
+type SSEBufferConfig struct {
+	MaxEvents int
+	Timeout   time.Duration
+}
+
+// SSERequestContext holds per-request metadata used for security evaluation.
+type SSERequestContext struct {
+	TraceID   types.TraceID
+	SessionID types.SessionID
+	Model     string
+	APIType   types.APIType
+	Tools     []AvailableTool
 }
 
 // BufferedSSEWriter buffers SSE events for security evaluation before sending to client
@@ -56,18 +97,17 @@ type BufferedSSEWriter struct {
 
 	// State
 	hasToolUse bool
-	completed  bool
-	timedOut   bool
+	state      bufferState
 	startTime  time.Time
 }
 
 // NewBufferedSSEWriter creates a buffered SSE writer
-func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
+func NewBufferedSSEWriter(w http.ResponseWriter, cfg SSEBufferConfig, ctx SSERequestContext) *BufferedSSEWriter {
 	flusher, _ := w.(http.Flusher)
 
 	// Build tool lookup map
 	toolMap := make(map[string]AvailableTool)
-	for _, t := range tools {
+	for _, t := range ctx.Tools {
 		toolMap[t.Name] = t
 	}
 
@@ -77,12 +117,12 @@ func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Durat
 		parser:          NewSSEParser(true), // Enable sanitization
 		events:          make([]SSEEvent, 0, 100),
 		toolCalls:       make(map[int]*StreamingToolCall),
-		maxBufferEvents: maxSize,
-		timeout:         timeout,
-		traceID:         traceID,
-		sessionID:       sessionID,
-		model:           model,
-		apiType:         apiType,
+		maxBufferEvents: cfg.MaxEvents,
+		timeout:         cfg.Timeout,
+		traceID:         ctx.TraceID,
+		sessionID:       ctx.SessionID,
+		model:           ctx.Model,
+		apiType:         ctx.APIType,
 		availableTools:  toolMap,
 		startTime:       time.Now(),
 	}
@@ -120,13 +160,13 @@ func (b *BufferedSSEWriter) BufferEvent(eventType string, data, raw []byte) erro
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.completed {
+	if b.state != bufferStateActive {
 		return errors.New("buffer already completed")
 	}
 
 	// Check timeout
 	if time.Since(b.startTime) > b.timeout {
-		b.timedOut = true
+		b.state = bufferStateTimedOut
 		return errors.New("buffer timeout exceeded")
 	}
 
@@ -190,10 +230,10 @@ func (b *BufferedSSEWriter) FlushAll() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.completed {
+	if b.state != bufferStateActive {
 		return nil
 	}
-	b.completed = true
+	b.state = bufferStateCompleted
 
 	for _, event := range b.events {
 		if err := b.writeRaw(event.Raw); err != nil {
@@ -210,10 +250,10 @@ func (b *BufferedSSEWriter) FlushModified(interceptor *security.Interceptor, blo
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.completed {
+	if b.state != bufferStateActive {
 		return nil
 	}
-	b.completed = true
+	b.state = bufferStateCompleted
 
 	if !b.hasToolUse || interceptor == nil || !interceptor.IsEnabled() {
 		// No tool use or no interceptor, flush as-is
@@ -332,7 +372,7 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 		shouldReplace := false
 		eventIndex := -1
 
-		if bytes.Contains(event.Data, []byte(`"content_block_start"`)) {
+		if bytes.Contains(event.Data, []byte(`"`+sseContentBlockStart+`"`)) {
 			var evt AnthropicContentBlockStart
 			if err := json.Unmarshal(event.Data, &evt); err == nil {
 				eventIndex = evt.Index
@@ -342,7 +382,7 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 					shouldReplace = true
 				}
 			}
-		} else if bytes.Contains(event.Data, []byte(`"content_block_delta"`)) {
+		} else if bytes.Contains(event.Data, []byte(`"`+sseContentBlockDelta+`"`)) {
 			var evt AnthropicContentBlockDelta
 			if err := json.Unmarshal(event.Data, &evt); err == nil {
 				eventIndex = evt.Index
@@ -352,7 +392,7 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 					shouldReplace = true
 				}
 			}
-		} else if bytes.Contains(event.Data, []byte(`"content_block_stop"`)) {
+		} else if bytes.Contains(event.Data, []byte(`"`+sseContentBlockStop+`"`)) {
 			var evt AnthropicContentBlockStop
 			if err := json.Unmarshal(event.Data, &evt); err == nil {
 				eventIndex = evt.Index
@@ -386,10 +426,10 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 			}
 
 			// Handle content_block_start
-			if bytes.Contains(event.Data, []byte(`"content_block_start"`)) && !replacedStartSent[eventIndex] {
+			if bytes.Contains(event.Data, []byte(`"`+sseContentBlockStart+`"`)) && !replacedStartSent[eventIndex] {
 				replacedStartSent[eventIndex] = true
-				if err := b.writeSSEEvent("content_block_start", map[string]any{
-					"type":  "content_block_start",
+				if err := b.writeSSEEvent(sseContentBlockStart, map[string]any{
+					"type":  sseContentBlockStart,
 					"index": eventIndex,
 					"content_block": map[string]any{
 						"type": "tool_use", "id": tc.ID, "name": shellToolName, "input": map[string]any{},
@@ -401,15 +441,15 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 			}
 
 			// Handle content_block_delta
-			if bytes.Contains(event.Data, []byte(`"content_block_delta"`)) && !replacedDeltaSent[eventIndex] {
+			if bytes.Contains(event.Data, []byte(`"`+sseContentBlockDelta+`"`)) && !replacedDeltaSent[eventIndex] {
 				replacedDeltaSent[eventIndex] = true
 				input := buildBlockedReplacement(tc.Name, matchResult)
-				inputJSONBytes, err := json.Marshal(input)
+				inputJSONBytes, err := marshalJSON(input)
 				if err != nil {
 					continue
 				}
-				if err := b.writeSSEEvent("content_block_delta", map[string]any{
-					"type":  "content_block_delta",
+				if err := b.writeSSEEvent(sseContentBlockDelta, map[string]any{
+					"type":  sseContentBlockDelta,
 					"index": eventIndex,
 					"delta": map[string]any{
 						"type":         "input_json_delta",
@@ -422,13 +462,13 @@ func (b *BufferedSSEWriter) flushFilteredAnthropicEvents(blockedIndices, replace
 			}
 
 			// Skip subsequent deltas for the same replaced block
-			if bytes.Contains(event.Data, []byte(`"content_block_delta"`)) {
+			if bytes.Contains(event.Data, []byte(`"`+sseContentBlockDelta+`"`)) {
 				continue
 			}
 		}
 
 		// Inject warning before message_stop (for both remove and replace modes if not already sent via text block)
-		if !warningInjected && bytes.Contains(event.Data, []byte(`"message_stop"`)) {
+		if !warningInjected && bytes.Contains(event.Data, []byte(`"`+sseMessageStop+`"`)) {
 			// Only inject for remove mode; replace mode already has text blocks
 			if len(blockedIndices) > 0 {
 				if err := b.injectWarning(blockedCalls); err != nil {
@@ -465,22 +505,22 @@ func (b *BufferedSSEWriter) injectWarning(blockedCalls []security.BlockedToolCal
 func (b *BufferedSSEWriter) injectAnthropicWarning(blockedCalls []security.BlockedToolCall) error {
 	warning := security.BuildWarningContent(blockedCalls)
 
-	if err := b.writeSSEEvent("content_block_start", map[string]any{
-		"type":          "content_block_start",
+	if err := b.writeSSEEvent(sseContentBlockStart, map[string]any{
+		"type":          sseContentBlockStart,
 		"index":         WarningBlockIndex,
 		"content_block": map[string]any{"type": "text", "text": ""},
 	}); err != nil {
 		return err
 	}
-	if err := b.writeSSEEvent("content_block_delta", map[string]any{
-		"type":  "content_block_delta",
+	if err := b.writeSSEEvent(sseContentBlockDelta, map[string]any{
+		"type":  sseContentBlockDelta,
 		"index": WarningBlockIndex,
 		"delta": map[string]any{"type": "text_delta", "text": warning},
 	}); err != nil {
 		return err
 	}
-	return b.writeSSEEvent("content_block_stop", map[string]any{
-		"type":  "content_block_stop",
+	return b.writeSSEEvent(sseContentBlockStop, map[string]any{
+		"type":  sseContentBlockStop,
 		"index": WarningBlockIndex,
 	})
 }
@@ -574,7 +614,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIEvents(blockedIndices, replacedIn
 							origName = origTC.Name
 						}
 						input := buildBlockedReplacement(origName, matchResult)
-						argBytes, err := json.Marshal(input)
+						argBytes, err := marshalJSON(input)
 						if err == nil {
 							replaced.Function.Arguments = string(argBytes)
 						}
@@ -597,7 +637,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIEvents(blockedIndices, replacedIn
 
 			// Need to convert back - just modify in place via JSON marshal/unmarshal dance
 			if modified {
-				filteredJSON, err := json.Marshal(filtered)
+				filteredJSON, err := marshalJSON(filtered)
 				if err != nil {
 					log.Debug("Failed to marshal filtered tool calls: %v", err)
 					continue
@@ -691,7 +731,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 			}
 
 			switch event.EventType {
-			case "response.output_item.added":
+			case sseResponseOutputItemAdded:
 				if !replacedItemSent[outputIdx] {
 					replacedItemSent[outputIdx] = true
 					tc := b.toolCalls[outputIdx]
@@ -700,7 +740,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 					}
 					// Emit replacement output_item.added with shell tool name
 					replacedEvent := map[string]any{
-						"type":         "response.output_item.added",
+						"type":         sseResponseOutputItemAdded,
 						"output_index": outputIdx,
 						"item": map[string]any{
 							"type":    "function_call",
@@ -715,7 +755,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 				}
 				continue
 
-			case "response.function_call_arguments.delta":
+			case sseResponseFunctionCallArgumentsDelta:
 				if !replacedArgsSent[outputIdx] {
 					replacedArgsSent[outputIdx] = true
 					tc := b.toolCalls[outputIdx]
@@ -724,13 +764,13 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 					}
 					matchResult := replacedIndices[outputIdx]
 					input := buildBlockedReplacement(tc.Name, matchResult)
-					argBytes, err := json.Marshal(input)
+					argBytes, err := marshalJSON(input)
 					if err != nil {
 						continue
 					}
 					// Emit single delta with full replacement arguments
 					replacedEvent := map[string]any{
-						"type":         "response.function_call_arguments.delta",
+						"type":         sseResponseFunctionCallArgumentsDelta,
 						"output_index": outputIdx,
 						"delta":        string(argBytes),
 					}
@@ -741,7 +781,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 				// Skip subsequent argument deltas
 				continue
 
-			case "response.function_call_arguments.done":
+			case sseResponseFunctionCallArgumentsDone:
 				// Emit done with the full replacement arguments
 				tc := b.toolCalls[outputIdx]
 				if tc == nil {
@@ -749,12 +789,12 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 				}
 				matchResult := replacedIndices[outputIdx]
 				input := buildBlockedReplacement(tc.Name, matchResult)
-				argBytes, err := json.Marshal(input)
+				argBytes, err := marshalJSON(input)
 				if err != nil {
 					continue
 				}
 				replacedEvent := map[string]any{
-					"type":         "response.function_call_arguments.done",
+					"type":         sseResponseFunctionCallArgumentsDone,
 					"output_index": outputIdx,
 					"arguments":    string(argBytes),
 				}
@@ -763,7 +803,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 				}
 				continue
 
-			case "response.output_item.done":
+			case sseResponseOutputItemDone:
 				// Emit done with the replaced item
 				tc := b.toolCalls[outputIdx]
 				if tc == nil {
@@ -771,12 +811,12 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 				}
 				matchResult := replacedIndices[outputIdx]
 				input := buildBlockedReplacement(tc.Name, matchResult)
-				argBytes, err := json.Marshal(input)
+				argBytes, err := marshalJSON(input)
 				if err != nil {
 					continue
 				}
 				replacedEvent := map[string]any{
-					"type":         "response.output_item.done",
+					"type":         sseResponseOutputItemDone,
 					"output_index": outputIdx,
 					"item": map[string]any{
 						"type":      "function_call",
@@ -798,7 +838,7 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 		}
 
 		// Inject warning before response.completed (for remove mode)
-		if !warningInjected && event.EventType == "response.completed" {
+		if !warningInjected && event.EventType == sseResponseCompleted {
 			if len(blockedIndices) > 0 {
 				if err := b.injectWarning(blockedCalls); err != nil {
 					log.Warn("Failed to inject Responses API warning: %v", err)
@@ -815,9 +855,22 @@ func (b *BufferedSSEWriter) flushFilteredOpenAIResponsesEvents(blockedIndices, r
 	return nil
 }
 
+// marshalJSON encodes v to JSON without HTML escaping (&, <, > are preserved).
+// json.Marshal HTML-escapes these by default, which corrupts user content.
+func marshalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
+	return b[:len(b)-1], nil // strip trailing newline from json.Encoder
+}
+
 // writeSSEEvent marshals data as JSON and writes it as an SSE event with "event: <type>\ndata: ...\n\n" framing.
 func (b *BufferedSSEWriter) writeSSEEvent(eventType string, data any) error {
-	jsonData, err := json.Marshal(data)
+	jsonData, err := marshalJSON(data)
 	if err != nil {
 		log.Warn("Failed to marshal SSE event: %v", err)
 		return err
@@ -834,7 +887,7 @@ func (b *BufferedSSEWriter) writeSSEEvent(eventType string, data any) error {
 
 // writeSSEData writes an SSE event with "data: ...\n\n" framing (no event type line).
 func (b *BufferedSSEWriter) writeSSEData(data any) error {
-	jsonData, err := json.Marshal(data)
+	jsonData, err := marshalJSON(data)
 	if err != nil {
 		log.Warn("Failed to marshal SSE data: %v", err)
 		return err
@@ -862,8 +915,8 @@ func (b *BufferedSSEWriter) writeRaw(raw []byte) error {
 
 func (b *BufferedSSEWriter) injectOpenAIResponsesWarning(blockedCalls []security.BlockedToolCall) error {
 	warning := security.BuildWarningContent(blockedCalls)
-	return b.writeSSEEvent("response.output_text.delta", map[string]any{
-		"type":          "response.output_text.delta",
+	return b.writeSSEEvent(sseResponseOutputTextDelta, map[string]any{
+		"type":          sseResponseOutputTextDelta,
 		"output_index":  WarningBlockIndex,
 		"content_index": 0,
 		"delta":         warning,

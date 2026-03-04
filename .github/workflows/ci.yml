@@ -127,13 +127,6 @@ jobs:
       - name: Unit tests (with race detector and coverage)
         run: go test -race -short -coverprofile coverage.out -covermode atomic ./...
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: coverage.out
-          flags: ${{ matrix.os }}
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
 
   # macOS and FreeBSD full tests run only on main to reduce CI costs (macOS is 10x billing).
   # The jobs always complete (SUCCESS) so they can be listed as required status checks;

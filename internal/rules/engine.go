@@ -411,38 +411,23 @@ func (e *Engine) validateContent(info *ExtractedInfo) *MatchResult {
 	// Step 4: Block null bytes in write content.
 	if (info.Operation == OpWrite || info.Operation == OpNone) && info.Content != "" {
 		if strings.ContainsRune(info.Content, 0) {
-			return &MatchResult{
-				Matched:  true,
-				RuleName: "builtin:block-null-byte-write",
-				Severity: SeverityHigh,
-				Action:   ActionBlock,
-				Message:  "Cannot write content containing null bytes",
-			}
+			m := NewMatch("builtin:block-null-byte-write", SeverityHigh, ActionBlock, "Cannot write content containing null bytes")
+			return &m
 		}
 	}
 
 	// Step 5: PreFilter — detect obfuscation (base64, hex encoding).
 	if info.Command != "" {
 		if match := e.preFilter.Check(info.Command); match != nil {
-			return &MatchResult{
-				Matched:  true,
-				RuleName: "builtin:block-obfuscation",
-				Severity: SeverityHigh,
-				Action:   ActionBlock,
-				Message:  fmt.Sprintf("Blocked: %s (%s)", match.Reason, match.PatternName),
-			}
+			m := NewMatch("builtin:block-obfuscation", SeverityHigh, ActionBlock, fmt.Sprintf("Blocked: %s (%s)", match.Reason, match.PatternName))
+			return &m
 		}
 	}
 
 	// Step 6: Block evasive commands that prevent static analysis.
 	if info.Evasive {
-		return &MatchResult{
-			Matched:  true,
-			RuleName: "builtin:block-shell-evasion",
-			Severity: SeverityHigh,
-			Action:   ActionBlock,
-			Message:  info.EvasiveReason,
-		}
+		m := NewMatch("builtin:block-shell-evasion", SeverityHigh, ActionBlock, info.EvasiveReason)
+		return &m
 	}
 
 	// Step 7: DLP — detect API keys/tokens in all operations.
@@ -518,7 +503,7 @@ func (e *Engine) matchRules(info *ExtractedInfo, allPaths []string, toolName str
 		}
 	}
 
-	return MatchResult{Matched: false}
+	return NoMatch()
 }
 
 // evaluateOperationRules evaluates operation-based rules (path, command, host matching)
@@ -590,7 +575,7 @@ func (e *Engine) evaluateOperationRules(rules []CompiledRule, info ExtractedInfo
 	}
 
 	// No operation-based rule matched
-	return MatchResult{Matched: false}
+	return NoMatch()
 }
 
 // evaluateMatchCompiled evaluates a single pre-compiled Match condition against the extracted info.
@@ -680,8 +665,14 @@ func patternKind(pattern string) string {
 	return "glob"
 }
 
+// Glob separators used by compilePattern.
+const (
+	pathGlobSeparator rune = '/'
+	hostGlobSeparator rune = '.'
+)
+
 // compilePattern compiles a pattern as either a regex (if "re:" prefixed) or a glob.
-// The separator is used for glob compilation ('/' for paths, '.' for hosts).
+// The separator is used for glob compilation (pathGlobSeparator for paths, hostGlobSeparator for hosts).
 func compilePattern(pattern string, separator rune) (*regexp.Regexp, glob.Glob, error) {
 	if strings.HasPrefix(pattern, "re:") {
 		re, err := compileRegex(pattern[3:])
@@ -737,13 +728,7 @@ func blockResult(rule *Rule, matchedValue string) MatchResult {
 		msg = strings.Replace(msg, "{path}", matchedValue, 1)
 		msg = strings.Replace(msg, "{host}", matchedValue, 1)
 	}
-	return MatchResult{
-		Matched:  true,
-		RuleName: rule.Name,
-		Severity: rule.GetSeverity(),
-		Action:   ActionBlock,
-		Message:  msg,
-	}
+	return NewMatch(rule.Name, rule.GetSeverity(), ActionBlock, msg)
 }
 
 // GetRules returns all active rules
@@ -821,24 +806,14 @@ func (e *Engine) ScanDLP(content string) *MatchResult {
 	// Tier 1: hardcoded patterns (fast, always available)
 	for _, pat := range dlpPatterns {
 		if pat.re.MatchString(content) {
-			return &MatchResult{
-				Matched:  true,
-				RuleName: pat.name,
-				Severity: SeverityCritical,
-				Action:   ActionBlock,
-				Message:  pat.message,
-			}
+			m := NewMatch(pat.name, SeverityCritical, ActionBlock, pat.message)
+			return &m
 		}
 	}
 	// Tier 2: crypto-specific DLP (checksum-validated)
 	if m := scanCrypto(content); m != nil {
-		return &MatchResult{
-			Matched:  true,
-			RuleName: m.name,
-			Severity: SeverityCritical,
-			Action:   ActionBlock,
-			Message:  m.message,
-		}
+		r := NewMatch(m.name, SeverityCritical, ActionBlock, m.message)
+		return &r
 	}
 	// Tier 3: gitleaks (if available)
 	if findings := e.dlpScanner.Scan(content); len(findings) > 0 {
@@ -847,13 +822,8 @@ func (e *Engine) ScanDLP(content string) *MatchResult {
 		if len(findings) > 1 {
 			msg += fmt.Sprintf(" (and %d more)", len(findings)-1)
 		}
-		return &MatchResult{
-			Matched:  true,
-			RuleName: "builtin:dlp-gitleaks-" + f.RuleID,
-			Severity: SeverityHigh,
-			Action:   ActionBlock,
-			Message:  msg,
-		}
+		r := NewMatch("builtin:dlp-gitleaks-"+f.RuleID, SeverityHigh, ActionBlock, msg)
+		return &r
 	}
 	return nil
 }
@@ -992,7 +962,7 @@ func compileMatchPattern(m *Match) (*CompiledMatch, error) {
 
 	// Compile Path (regex or glob)
 	if m.Path != "" {
-		re, g, err := compilePattern(m.Path, '/')
+		re, g, err := compilePattern(m.Path, pathGlobSeparator)
 		if err != nil {
 			return nil, fmt.Errorf("match.path %s %q: %w", patternKind(m.Path), m.Path, err)
 		}
@@ -1010,7 +980,7 @@ func compileMatchPattern(m *Match) (*CompiledMatch, error) {
 
 	// Compile Host (regex or glob)
 	if m.Host != "" {
-		re, g, err := compilePattern(m.Host, '.')
+		re, g, err := compilePattern(m.Host, hostGlobSeparator)
 		if err != nil {
 			return nil, fmt.Errorf("match.host %s %q: %w", patternKind(m.Host), m.Host, err)
 		}

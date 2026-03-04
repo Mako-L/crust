@@ -16,7 +16,10 @@ func TestBufferedSSEWriter_AnthropicToolUse(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	// Create buffered writer
-	buffer := NewBufferedSSEWriter(w, 100, 30*time.Second, "trace-1", "session-1", "claude-3", types.APITypeAnthropic, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 100, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "claude-3", APIType: types.APITypeAnthropic, Tools: nil},
+	)
 
 	// Simulate Anthropic SSE events for a tool_use
 	events := []struct {
@@ -64,7 +67,10 @@ func TestBufferedSSEWriter_AnthropicToolUse(t *testing.T) {
 
 func TestBufferedSSEWriter_OpenAIToolUse(t *testing.T) {
 	w := httptest.NewRecorder()
-	buffer := NewBufferedSSEWriter(w, 100, 30*time.Second, "trace-1", "session-1", "gpt-4", types.APITypeOpenAICompletion, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 100, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "gpt-4", APIType: types.APITypeOpenAICompletion, Tools: nil},
+	)
 
 	// Simulate OpenAI SSE events for a tool call
 	events := []struct {
@@ -101,7 +107,10 @@ func TestBufferedSSEWriter_OpenAIToolUse(t *testing.T) {
 
 func TestBufferedSSEWriter_FlushAll(t *testing.T) {
 	w := httptest.NewRecorder()
-	buffer := NewBufferedSSEWriter(w, 100, 30*time.Second, "trace-1", "session-1", "claude-3", types.APITypeAnthropic, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 100, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "claude-3", APIType: types.APITypeAnthropic, Tools: nil},
+	)
 
 	// Add some events
 	event1 := []byte("data: {\"type\":\"message_start\"}\n\n")
@@ -128,7 +137,10 @@ func TestBufferedSSEWriter_FlushAll(t *testing.T) {
 
 func TestBufferedSSEWriter_BufferSizeLimit(t *testing.T) {
 	w := httptest.NewRecorder()
-	buffer := NewBufferedSSEWriter(w, 2, 30*time.Second, "trace-1", "session-1", "claude-3", types.APITypeAnthropic, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 2, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "claude-3", APIType: types.APITypeAnthropic, Tools: nil},
+	)
 
 	// Add events up to limit
 	_ = buffer.BufferEvent("event1", []byte("{}"), []byte("data: {}\n\n"))
@@ -143,16 +155,36 @@ func TestBufferedSSEWriter_BufferSizeLimit(t *testing.T) {
 
 func TestBufferedSSEWriter_Timeout(t *testing.T) {
 	w := httptest.NewRecorder()
-	// Very short timeout
-	buffer := NewBufferedSSEWriter(w, 100, 1*time.Millisecond, "trace-1", "session-1", "claude-3", types.APITypeAnthropic, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 100, Timeout: 1 * time.Millisecond},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "claude-3", APIType: types.APITypeAnthropic, Tools: nil},
+	)
 
-	// Wait for timeout
-	time.Sleep(10 * time.Millisecond)
+	// Buffer one event before the timeout fires.
+	_ = buffer.BufferEvent("message_start", []byte(`{}`), []byte("data: {}\n\n"))
 
-	// Should fail due to timeout
+	time.Sleep(10 * time.Millisecond) // ensure timeout elapsed
+
+	// BufferEvent must return a timeout error.
 	err := buffer.BufferEvent("event", []byte("{}"), []byte("data: {}\n\n"))
 	if err == nil {
-		t.Error("Expected error when buffer timed out")
+		t.Fatal("expected error when buffer timed out, got nil")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("error should mention timeout, got: %v", err)
+	}
+
+	// After a timeout error, FlushModified and FlushAll must return nil and must
+	// write no events to the client (fail-closed: timed-out buffer is discarded).
+	bytesBefore := w.Body.Len()
+	if ferr := buffer.FlushModified(nil, types.BlockModeRemove); ferr != nil {
+		t.Errorf("FlushModified after timeout returned %v, want nil", ferr)
+	}
+	if ferr := buffer.FlushAll(); ferr != nil {
+		t.Errorf("FlushAll after timeout returned %v, want nil", ferr)
+	}
+	if w.Body.Len() != bytesBefore {
+		t.Errorf("flush after timeout wrote %d bytes, want 0 (fail-closed)", w.Body.Len()-bytesBefore)
 	}
 }
 
@@ -192,8 +224,10 @@ func TestBufferedSSEWriter_ReplaceModeNoShellTool_FallsBackToRemove(t *testing.T
 	tools := []AvailableTool{
 		{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}
-	buffer := NewBufferedSSEWriter(w, 100, 30*time.Second,
-		"trace-1", "session-1", "claude-3", types.APITypeAnthropic, tools)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 100, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "trace-1", SessionID: "session-1", Model: "claude-3", APIType: types.APITypeAnthropic, Tools: tools},
+	)
 
 	// Buffer Anthropic events with a tool_use
 	events := []struct {

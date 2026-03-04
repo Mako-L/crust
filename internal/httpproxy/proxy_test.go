@@ -3,6 +3,7 @@ package httpproxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1231,15 +1233,32 @@ func TestAgent_OpenAIResponses_Streaming(t *testing.T) {
 // through the rule engine via FlushModified() and drops uninspected overflow
 // events (fail-closed). Previously FlushAll() sent events without evaluation
 // and io.Copy streamed the remainder unfiltered — a security bypass.
-func TestBug_BufferOverflowFailsClosed(t *testing.T) {
+// injectOverflowWarning is a test helper that writes a truncation SSE comment.
+// Production code uses retryAsNonStreaming instead; this is kept for unit tests
+// that verify the BufferedSSEWriter fail-closed API contract directly.
+func injectOverflowWarning(w http.ResponseWriter) {
+	const warning = "[Crust] Response truncated: buffer limit exceeded. Some content may be missing."
+	_, _ = fmt.Fprintf(w, ": %s\n\n", warning)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// TestBufferedSSEWriter_OverflowFailsClosed tests the BufferedSSEWriter unit API:
+// when the buffer overflows, FlushModified sends only buffered events (not the one
+// that caused the overflow). This is the fail-closed security property.
+// Note: production integration uses retryAsNonStreaming on overflow, not this path.
+func TestBufferedSSEWriter_OverflowFailsClosed(t *testing.T) {
 	// 3-event stream; buffer holds only 2 events → 3rd triggers overflow
 	stream := "data: {\"seq\":1}\n\n" +
 		"data: {\"seq\":2}\n\n" +
 		"data: {\"seq\":3}\n\n"
 
 	w := httptest.NewRecorder()
-	buffer := NewBufferedSSEWriter(w, 2, 30*time.Second,
-		"t", "s", "m", types.APITypeOpenAICompletion, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 2, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "t", SessionID: "s", Model: "m", APIType: types.APITypeOpenAICompletion, Tools: nil},
+	)
 
 	// Replicate the new fail-closed overflow logic
 	data := []byte(stream)
@@ -1285,6 +1304,103 @@ func TestBug_BufferOverflowFailsClosed(t *testing.T) {
 	// Truncation warning must be present
 	if !strings.Contains(clientReceived, "[Crust] Response truncated") {
 		t.Error("missing overflow truncation warning")
+	}
+}
+
+// TestRetryAsNonStreaming_RespectsClientContext verifies that retryAsNonStreaming
+// uses the original request context, so a canceled client context cancels the
+// retry (preventing it from blocking after client disconnect).
+func TestRetryAsNonStreaming_RespectsClientContext(t *testing.T) {
+	// Upstream server that hangs until its context is canceled.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // block until the request context is canceled
+		http.Error(w, "canceled", http.StatusGatewayTimeout)
+	}))
+	defer upstream.Close()
+
+	proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	clientCtx, cancelClient := context.WithCancel(context.Background())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"stream":true}`))
+	req = req.WithContext(clientCtx)
+	req.Header.Set("Content-Type", "application/json")
+	upstreamReq, err := http.NewRequestWithContext(clientCtx, http.MethodPost, upstream.URL+"/v1/messages",
+		strings.NewReader(`{"stream":false}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	rctx := &RequestContext{
+		Writer:      httptest.NewRecorder(),
+		Request:     req,
+		UpstreamReq: upstreamReq,
+		RequestBody: []byte(`{"stream":true}`),
+		APIType:     types.APITypeAnthropic,
+	}
+
+	// Cancel the client context immediately — retryAsNonStreaming must not block.
+	cancelClient()
+
+	start := time.Now()
+	_, _, _, _, statusCode := proxy.retryAsNonStreaming(rctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 5*time.Second {
+		t.Errorf("retryAsNonStreaming blocked for %v after client context canceled (want <5s)", elapsed)
+	}
+	if statusCode == http.StatusOK {
+		t.Error("expected non-200 status when client context is canceled, got 200")
+	}
+}
+
+// TestRetryAsNonStreaming_ErrorStatusCodes verifies that retryAsNonStreaming
+// propagates non-2xx upstream status codes (e.g. 429, 500) to the caller.
+func TestRetryAsNonStreaming_ErrorStatusCodes(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamStatus int
+	}{
+		{"upstream 429", http.StatusTooManyRequests},
+		{"upstream 500", http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "error from upstream", tt.upstreamStatus)
+			}))
+			defer upstream.Close()
+
+			proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false)
+			if err != nil {
+				t.Fatalf("NewProxy: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"stream":true}`))
+			req.Header.Set("Content-Type", "application/json")
+			upstreamReq, err := http.NewRequestWithContext(req.Context(), http.MethodPost, upstream.URL+"/v1/messages",
+				strings.NewReader(`{"stream":false}`))
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+
+			rctx := &RequestContext{
+				Writer:      httptest.NewRecorder(),
+				Request:     req,
+				UpstreamReq: upstreamReq,
+				RequestBody: []byte(`{"stream":true}`),
+				APIType:     types.APITypeAnthropic,
+			}
+
+			_, _, _, _, statusCode := proxy.retryAsNonStreaming(rctx)
+			if statusCode != tt.upstreamStatus {
+				t.Errorf("expected status %d, got %d", tt.upstreamStatus, statusCode)
+			}
+		})
 	}
 }
 
@@ -1644,14 +1760,26 @@ func TestAgent_ClaudeCode_BufferedStreaming_MultiDataLine(t *testing.T) {
 
 // TestAgent_OpenAI_BufferOverflowFailsClosed exercises Bug 1 through the full
 // buffered streaming pipeline. Configures a small buffer (2 events) and sends
-// 5 OpenAI SSE chunks — verifies overflow events are dropped (fail-closed).
-func TestAgent_OpenAI_BufferOverflowFailsClosed(t *testing.T) {
+// When the SSE buffer overflows, the proxy retries the request with stream=false
+// and returns the full JSON response — client gets JSON, not truncated SSE.
+func TestAgent_OpenAI_BufferOverflow_RetriesNonStreaming(t *testing.T) {
+	var reqCount int32
+	nonStreamingJSON := `{"id":"chatcmpl-retry","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"full response"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		for i := 1; i <= 5; i++ {
-			fmt.Fprintf(w, "data: {\"id\":\"chunk-%d\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"word%d \"},\"finish_reason\":null}]}\n\n", i, i)
+		count := atomic.AddInt32(&reqCount, 1)
+		if count == 1 {
+			// First request: streaming — send 5 events to trigger overflow at limit=2
+			w.Header().Set("Content-Type", "text/event-stream")
+			for i := 1; i <= 5; i++ {
+				fmt.Fprintf(w, "data: {\"id\":\"chunk-%d\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"word%d \"},\"finish_reason\":null}]}\n\n", i, i)
+			}
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		} else {
+			// Retry request: non-streaming — return JSON
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(nonStreamingJSON))
 		}
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
 
@@ -1700,34 +1828,33 @@ func TestAgent_OpenAI_BufferOverflowFailsClosed(t *testing.T) {
 
 	secCfg := security.InterceptionConfig{
 		BufferStreaming: true,
-		MaxBufferEvents: 2, // Only 2 events fit — overflow on event 3
+		MaxBufferEvents: 2, // limit=2 → overflow on event 3
 		BufferTimeout:   30,
 		BlockMode:       types.BlockModeRemove,
 	}
 
 	p.handleBufferedStreamingRequest(rctx, secCfg)
 
+	// Two requests must have been made: original streaming + retry non-streaming
+	if got := atomic.LoadInt32(&reqCount); got != 2 {
+		t.Errorf("expected 2 upstream requests (stream + retry), got %d", got)
+	}
+
 	respBody := w.Body.String()
 
-	// Buffered events 1-2 should be present (evaluated through rule engine)
-	for i := 1; i <= 2; i++ {
-		chunk := fmt.Sprintf("chunk-%d", i)
-		if !strings.Contains(respBody, chunk) {
-			t.Errorf("buffered event %s missing from response", chunk)
-		}
+	// Response must be the non-streaming JSON, not SSE events
+	if !strings.Contains(respBody, "full response") {
+		t.Errorf("expected non-streaming retry response body, got: %s", respBody)
 	}
 
-	// Overflow events 3-5 must NOT be present — they were not evaluated (fail-closed)
-	for i := 3; i <= 5; i++ {
-		chunk := fmt.Sprintf("chunk-%d", i)
-		if strings.Contains(respBody, chunk) {
-			t.Errorf("SECURITY: overflow event %s was forwarded without security evaluation", chunk)
-		}
+	// No SSE truncation warning in the response
+	if strings.Contains(respBody, "[Crust] Response truncated") {
+		t.Error("truncation warning must not appear in non-streaming retry response")
 	}
 
-	// Truncation warning must be present
-	if !strings.Contains(respBody, "[Crust] Response truncated") {
-		t.Error("missing overflow truncation warning in response")
+	// Response must be valid JSON (not SSE)
+	if !json.Valid([]byte(respBody)) {
+		t.Errorf("response should be valid JSON after non-streaming retry, got: %s", respBody)
 	}
 }
 
@@ -2203,6 +2330,50 @@ func TestProcessNonStreamingResponse_Anthropic(t *testing.T) {
 	}
 	if len(toolCalls) != 0 {
 		t.Errorf("toolCalls = %d, want 0", len(toolCalls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// forceNonStreaming tests
+// ---------------------------------------------------------------------------
+
+// forceNonStreaming sets stream=false while preserving all other fields.
+func TestForceNonStreaming_SetsStreamFalse(t *testing.T) {
+	input := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	out := forceNonStreaming([]byte(input))
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if string(got["stream"]) != "false" {
+		t.Errorf("stream = %s, want false", got["stream"])
+	}
+	if string(got["model"]) != `"gpt-4o"` {
+		t.Errorf("model = %s, want \"gpt-4o\"", got["model"])
+	}
+}
+
+// forceNonStreaming works when stream field is absent.
+func TestForceNonStreaming_NoStreamField(t *testing.T) {
+	input := `{"model":"claude-3","messages":[]}`
+	out := forceNonStreaming([]byte(input))
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if string(got["stream"]) != "false" {
+		t.Errorf("stream = %s, want false", got["stream"])
+	}
+}
+
+// forceNonStreaming returns input unchanged on invalid JSON (best-effort).
+func TestForceNonStreaming_InvalidJSON(t *testing.T) {
+	input := []byte("not json at all")
+	out := forceNonStreaming(input)
+	if !bytes.Equal(out, input) {
+		t.Errorf("expected unchanged input on parse error, got %q", out)
 	}
 }
 

@@ -1,6 +1,7 @@
 package security
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -209,11 +210,13 @@ rules:
 
 			result, err := interceptor.InterceptOpenAIResponse(
 				responseBody,
-				"trace-1",
-				"session-1",
-				"gpt-4",
-				types.APITypeOpenAICompletion,
-				tt.blockMode,
+				InterceptionContext{
+					TraceID:   "trace-1",
+					SessionID: "session-1",
+					Model:     "gpt-4",
+					APIType:   types.APITypeOpenAICompletion,
+					BlockMode: tt.blockMode,
+				},
 			)
 
 			if err != nil {
@@ -221,8 +224,8 @@ rules:
 			}
 
 			// Verify blocked status
-			if result.HasBlockedCalls != tt.wantBlocked {
-				t.Errorf("HasBlockedCalls = %v, want %v", result.HasBlockedCalls, tt.wantBlocked)
+			if (len(result.BlockedToolCalls) > 0) != tt.wantBlocked {
+				t.Errorf("HasBlockedCalls = %v, want %v", len(result.BlockedToolCalls) > 0, tt.wantBlocked)
 			}
 
 			// Verify tool was removed/kept
@@ -312,11 +315,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -386,11 +391,13 @@ func TestInterceptOpenAIResponse_EmptyResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := interceptor.InterceptOpenAIResponse(
 				tt.responseBody,
-				"trace-1",
-				"session-1",
-				"gpt-4",
-				types.APITypeOpenAICompletion,
-				types.BlockModeRemove,
+				InterceptionContext{
+					TraceID:   "trace-1",
+					SessionID: "session-1",
+					Model:     "gpt-4",
+					APIType:   types.APITypeOpenAICompletion,
+					BlockMode: types.BlockModeRemove,
+				},
 			)
 
 			if tt.wantError && err == nil {
@@ -440,11 +447,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -457,7 +466,7 @@ rules:
 	}
 
 	// No blocked calls should be recorded
-	if result.HasBlockedCalls {
+	if len(result.BlockedToolCalls) > 0 {
 		t.Error("HasBlockedCalls should be false when interceptor is disabled")
 	}
 }
@@ -547,19 +556,21 @@ rules:
 
 			result, err := interceptor.InterceptAnthropicResponse(
 				responseBody,
-				"trace-1",
-				"session-1",
-				"claude-3-opus",
-				types.APITypeAnthropic,
-				tt.blockMode,
+				InterceptionContext{
+					TraceID:   "trace-1",
+					SessionID: "session-1",
+					Model:     "claude-3-opus",
+					APIType:   types.APITypeAnthropic,
+					BlockMode: tt.blockMode,
+				},
 			)
 
 			if err != nil {
 				t.Fatalf("InterceptAnthropicResponse returned error: %v", err)
 			}
 
-			if result.HasBlockedCalls != tt.wantBlocked {
-				t.Errorf("HasBlockedCalls = %v, want %v", result.HasBlockedCalls, tt.wantBlocked)
+			if (len(result.BlockedToolCalls) > 0) != tt.wantBlocked {
+				t.Errorf("HasBlockedCalls = %v, want %v", len(result.BlockedToolCalls) > 0, tt.wantBlocked)
 			}
 
 			// Parse modified response
@@ -613,11 +624,13 @@ func TestInterceptAnthropicResponse_TextBlockPassThrough(t *testing.T) {
 
 	result, err := interceptor.InterceptAnthropicResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"claude-3-opus",
-		types.APITypeAnthropic,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "claude-3-opus",
+			APIType:   types.APITypeAnthropic,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -625,7 +638,7 @@ func TestInterceptAnthropicResponse_TextBlockPassThrough(t *testing.T) {
 	}
 
 	// Should not have any blocked calls
-	if result.HasBlockedCalls {
+	if len(result.BlockedToolCalls) > 0 {
 		t.Error("Expected no blocked calls for text-only response")
 	}
 
@@ -686,11 +699,13 @@ rules:
 
 	result, err := interceptor.InterceptAnthropicResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"claude-3-opus",
-		types.APITypeAnthropic,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "claude-3-opus",
+			APIType:   types.APITypeAnthropic,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -766,11 +781,13 @@ func TestInterceptToolCalls_RoutesToCorrectHandler(t *testing.T) {
 
 			result, err := interceptor.InterceptToolCalls(
 				responseBody,
-				"trace-1",
-				"session-1",
-				"test-model",
-				tt.apiType,
-				types.BlockModeRemove,
+				InterceptionContext{
+					TraceID:   "trace-1",
+					SessionID: "session-1",
+					Model:     "test-model",
+					APIType:   tt.apiType,
+					BlockMode: types.BlockModeRemove,
+				},
 			)
 
 			if err != nil {
@@ -810,11 +827,13 @@ func TestInterceptOpenAIResponse_NilEngine(t *testing.T) {
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -1034,11 +1053,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -1091,11 +1112,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	// Should not error, just treat as non-matching
@@ -1107,7 +1130,7 @@ rules:
 	}
 
 	// Should not block because the pattern can't match invalid JSON
-	if result.HasBlockedCalls {
+	if len(result.BlockedToolCalls) > 0 {
 		t.Error("Should not block tool calls with malformed arguments that don't match pattern")
 	}
 }
@@ -1139,11 +1162,13 @@ rules:
 
 	result, err := interceptor.InterceptAnthropicResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"claude-3-opus",
-		types.APITypeAnthropic,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "claude-3-opus",
+			APIType:   types.APITypeAnthropic,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -1155,7 +1180,7 @@ rules:
 		t.Error("Expected response to be unchanged when interceptor is disabled")
 	}
 
-	if result.HasBlockedCalls {
+	if len(result.BlockedToolCalls) > 0 {
 		t.Error("HasBlockedCalls should be false when interceptor is disabled")
 	}
 }
@@ -1180,11 +1205,13 @@ func TestInterceptAnthropicResponse_NilEngine(t *testing.T) {
 
 	result, err := interceptor.InterceptAnthropicResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"claude-3-opus",
-		types.APITypeAnthropic,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "claude-3-opus",
+			APIType:   types.APITypeAnthropic,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -1227,11 +1254,13 @@ func TestInterceptAnthropicResponse_EmptyResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := interceptor.InterceptAnthropicResponse(
 				tt.responseBody,
-				"trace-1",
-				"session-1",
-				"claude-3-opus",
-				types.APITypeAnthropic,
-				types.BlockModeRemove,
+				InterceptionContext{
+					TraceID:   "trace-1",
+					SessionID: "session-1",
+					Model:     "claude-3-opus",
+					APIType:   types.APITypeAnthropic,
+					BlockMode: types.BlockModeRemove,
+				},
 			)
 
 			// Should not error
@@ -1279,11 +1308,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeReplace,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeReplace,
+		},
 	)
 
 	if err != nil {
@@ -1332,11 +1363,13 @@ rules:
 
 	result, err := interceptor.InterceptAnthropicResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"claude-3-opus",
-		types.APITypeAnthropic,
-		types.BlockModeReplace,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "claude-3-opus",
+			APIType:   types.APITypeAnthropic,
+			BlockMode: types.BlockModeReplace,
+		},
 	)
 
 	if err != nil {
@@ -1414,11 +1447,13 @@ rules:
 
 	result, err := interceptor.InterceptOpenAIResponse(
 		responseBody,
-		"trace-1",
-		"session-1",
-		"gpt-4",
-		types.APITypeOpenAICompletion,
-		types.BlockModeRemove,
+		InterceptionContext{
+			TraceID:   "trace-1",
+			SessionID: "session-1",
+			Model:     "gpt-4",
+			APIType:   types.APITypeOpenAICompletion,
+			BlockMode: types.BlockModeRemove,
+		},
 	)
 
 	if err != nil {
@@ -1457,13 +1492,85 @@ rules:
 		t.Errorf("Allowed tool ID = %s, want call_2", allowed.ID)
 	}
 
-	// Check HasBlockedCalls
-	if !result.HasBlockedCalls {
-		t.Error("HasBlockedCalls should be true")
+	if len(result.BlockedToolCalls) == 0 {
+		t.Error("BlockedToolCalls should be non-empty")
 	}
 
 	// Check ModifiedResponse is not empty
 	if len(result.ModifiedResponse) == 0 {
 		t.Error("ModifiedResponse should not be empty")
 	}
+}
+
+// FuzzInterceptAnthropicResponse checks that intercepting Anthropic responses
+// never panics and always returns a non-nil result.
+// Includes seeds with HTML-special characters as regression tests for the
+// json.Marshal HTML-escaping bug (& → \u0026, < → \u003c, > → \u003e).
+func FuzzInterceptAnthropicResponse(f *testing.F) {
+	// HTML-special character seeds — regression for json.Marshal HTML escaping.
+	f.Add(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"a & b"}]}`)
+	f.Add(`{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"text","text":"<tag>"}]}`)
+	f.Add(`{"id":"msg_3","type":"message","role":"assistant","content":[{"type":"text","text":"a > b"}]}`)
+	f.Add(`{"id":"msg_4","type":"message","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo a&b"}}]}`)
+	// Blocked Bash tool + text with & in same message — exercises re-serialization + HTML escaping invariant.
+	f.Add(`{"id":"msg_5","type":"message","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"running a & b"}]}`)
+	// Normal content
+	f.Add(`{"id":"msg_6","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}]}`)
+	// Edge cases
+	f.Add(`{}`)
+	f.Add(`[]`)
+	f.Add(``)
+
+	// Use a real engine that blocks Bash so tool calls are actually intercepted
+	// and re-serialized — making the HTML-escaping invariants non-trivial.
+	rulesDir := f.TempDir()
+	blockBashYAML := "rules:\n  - name: block-bash\n    match:\n      tool: [Bash]\n    message: \"Bash blocked\"\n"
+	if err := os.WriteFile(filepath.Join(rulesDir, "fuzz-rules.yaml"), []byte(blockBashYAML), 0644); err != nil {
+		f.Fatalf("Failed to write fuzz rules: %v", err)
+	}
+	engine, err := rules.NewEngine(rules.EngineConfig{
+		UserRulesDir:   rulesDir,
+		DisableBuiltin: true,
+	})
+	if err != nil {
+		f.Fatalf("Failed to create engine: %v", err)
+	}
+	interceptor := NewInterceptor(engine, nil) // nil storage is safe: record.go guards nil
+
+	f.Fuzz(func(t *testing.T, body string) {
+		result, err := interceptor.InterceptAnthropicResponse(
+			[]byte(body),
+			InterceptionContext{
+				TraceID:   types.TraceID("fuzz-trace"),
+				SessionID: types.SessionID("fuzz-session"),
+				Model:     "claude-3",
+				APIType:   types.APITypeAnthropic,
+				BlockMode: types.BlockModeRemove,
+			},
+		)
+		// INVARIANT 1: Must not panic (implicit — fuzz framework catches panics).
+
+		// INVARIANT 2: result and err must not both be nil.
+		if result == nil && err == nil {
+			t.Error("both result and err are nil")
+		}
+		if result != nil && len(result.ModifiedResponse) == 0 && len(body) > 0 {
+			t.Errorf("non-empty input produced empty ModifiedResponse: input=%q", body)
+		}
+
+		// INVARIANT 3: If the response was re-serialized (output ≠ input), the
+		// output must not contain HTML-escaped characters. Regression for the
+		// json.Marshal HTML-escaping bug (& → \u0026, < → \u003c, > → \u003e).
+		if result != nil && string(result.ModifiedResponse) != body {
+			if bytes.Contains(result.ModifiedResponse, []byte(`\u0026`)) {
+				t.Errorf("re-serialized output contains HTML-escaped & (\\u0026): %q", result.ModifiedResponse)
+			}
+			if bytes.Contains(result.ModifiedResponse, []byte(`\u003c`)) {
+				t.Errorf("re-serialized output contains HTML-escaped < (\\u003c): %q", result.ModifiedResponse)
+			}
+			if bytes.Contains(result.ModifiedResponse, []byte(`\u003e`)) {
+				t.Errorf("re-serialized output contains HTML-escaped > (\\u003e): %q", result.ModifiedResponse)
+			}
+		}
+	})
 }

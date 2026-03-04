@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -242,5 +243,33 @@ rules:
 				t.Errorf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestIsUnknownFieldError(t *testing.T) {
+	input := `
+rules:
+  - name: test
+    block: "/etc/passwd"
+    alert_webhook: "https://example.com"
+`
+	var rs RuleSetConfig
+	dec := yaml.NewDecoder(bytes.NewReader([]byte(input)))
+	dec.KnownFields(true)
+	err := dec.Decode(&rs)
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+	if !isUnknownFieldError(err) {
+		t.Errorf("expected unknown field error, got: %v", err)
+	}
+
+	// Verify the valid fields still parsed correctly (fallback re-parse works).
+	var rs2 RuleSetConfig
+	if err2 := yaml.Unmarshal([]byte(input), &rs2); err2 != nil {
+		t.Fatalf("fallback unmarshal failed: %v", err2)
+	}
+	if len(rs2.Rules) != 1 || rs2.Rules[0].Name != "test" {
+		t.Errorf("fallback parse: expected 1 rule named 'test', got %+v", rs2.Rules)
 	}
 }

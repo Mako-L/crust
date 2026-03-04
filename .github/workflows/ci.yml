@@ -139,7 +139,9 @@ jobs:
           $m = [regex]::Match($src, '(?s)psBootstrapScript\s*=\s*`\n([\s\S]+?)\n`')
           if (-not $m.Success) { Write-Error 'Could not extract psBootstrapScript'; exit 1 }
           $tmp = [IO.Path]::ChangeExtension([IO.Path]::GetTempFileName(), '.ps1')
-          Set-Content $tmp $m.Groups[1].Value -Encoding UTF8
+          # Write with UTF-8 BOM — PS 7 Set-Content omits BOM by default,
+          # which triggers PSUseBOMForUnicodeEncodedFile on non-ASCII chars.
+          [System.IO.File]::WriteAllText($tmp, $m.Groups[1].Value, [System.Text.UTF8Encoding]::new($true))
           $results = Invoke-ScriptAnalyzer -Path $tmp -Severity Warning,Error
           Remove-Item $tmp -ErrorAction SilentlyContinue
           if ($results) { $results | Format-Table; exit 1 }

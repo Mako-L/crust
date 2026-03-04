@@ -72,7 +72,7 @@ while ($true) {
                             $rhs.Expression -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
                             $vars[$lhs.VariablePath.UserPath] = $rhs.Expression.Value
                         }
-                    } catch {}
+                    } catch { $null = $_ }
                 }
                 # Extract all CommandAst nodes from this statement, recursing into
                 # nested scriptblocks (pipelines, foreach bodies, etc.).
@@ -95,7 +95,7 @@ while ($true) {
                                 } elseif ($_ -is [System.Management.Automation.Language.CommandParameterAst]) {
                                     $ag.Add('-' + $_.ParameterName)
                                 }
-                            } catch {}
+                            } catch { $null = $_ }
                         }
                         $cmds.Add([PSCustomObject]@{
                             name = $nm

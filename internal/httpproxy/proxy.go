@@ -622,7 +622,10 @@ func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg secur
 			InputSchema: schema,
 		})
 	}
-	buffer := NewBufferedSSEWriter(ctx.Writer, secCfg.MaxBufferEvents, timeout, ctx.TraceID, ctx.SessionID, ctx.Model, ctx.APIType, availableTools)
+	buffer := NewBufferedSSEWriter(ctx.Writer,
+		SSEBufferConfig{MaxEvents: secCfg.MaxBufferEvents, Timeout: timeout},
+		SSERequestContext{TraceID: ctx.TraceID, SessionID: ctx.SessionID, Model: ctx.Model, APIType: ctx.APIType, Tools: availableTools},
+	)
 
 	// Get interceptor early to avoid goto issues.
 	interceptor := security.GetGlobalInterceptor()

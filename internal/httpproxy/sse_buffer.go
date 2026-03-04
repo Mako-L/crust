@@ -56,6 +56,21 @@ type AvailableTool struct {
 	InputSchema json.RawMessage // The full schema for input validation
 }
 
+// SSEBufferConfig controls buffering behavior.
+type SSEBufferConfig struct {
+	MaxEvents int
+	Timeout   time.Duration
+}
+
+// SSERequestContext holds per-request metadata used for security evaluation.
+type SSERequestContext struct {
+	TraceID   types.TraceID
+	SessionID types.SessionID
+	Model     string
+	APIType   types.APIType
+	Tools     []AvailableTool
+}
+
 // BufferedSSEWriter buffers SSE events for security evaluation before sending to client
 type BufferedSSEWriter struct {
 	underlying http.ResponseWriter
@@ -87,12 +102,12 @@ type BufferedSSEWriter struct {
 }
 
 // NewBufferedSSEWriter creates a buffered SSE writer
-func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
+func NewBufferedSSEWriter(w http.ResponseWriter, cfg SSEBufferConfig, ctx SSERequestContext) *BufferedSSEWriter {
 	flusher, _ := w.(http.Flusher)
 
 	// Build tool lookup map
 	toolMap := make(map[string]AvailableTool)
-	for _, t := range tools {
+	for _, t := range ctx.Tools {
 		toolMap[t.Name] = t
 	}
 
@@ -102,12 +117,12 @@ func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Durat
 		parser:          NewSSEParser(true), // Enable sanitization
 		events:          make([]SSEEvent, 0, 100),
 		toolCalls:       make(map[int]*StreamingToolCall),
-		maxBufferEvents: maxSize,
-		timeout:         timeout,
-		traceID:         traceID,
-		sessionID:       sessionID,
-		model:           model,
-		apiType:         apiType,
+		maxBufferEvents: cfg.MaxEvents,
+		timeout:         cfg.Timeout,
+		traceID:         ctx.TraceID,
+		sessionID:       ctx.SessionID,
+		model:           ctx.Model,
+		apiType:         ctx.APIType,
 		availableTools:  toolMap,
 		startTime:       time.Now(),
 	}

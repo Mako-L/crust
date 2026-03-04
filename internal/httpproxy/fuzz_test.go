@@ -106,10 +106,9 @@ func FuzzBufferEvent(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, eventType string, data []byte) {
 		w := httptest.NewRecorder()
-		buf := NewBufferedSSEWriter(
-			w, 1000, 30*time.Second,
-			types.TraceID("t"), types.SessionID("s"), "model",
-			types.APITypeAnthropic, nil,
+		buf := NewBufferedSSEWriter(w,
+			SSEBufferConfig{MaxEvents: 1000, Timeout: 30 * time.Second},
+			SSERequestContext{TraceID: "t", SessionID: "s", Model: "model", APIType: types.APITypeAnthropic, Tools: nil},
 		)
 
 		raw := append([]byte("data: "), data...)

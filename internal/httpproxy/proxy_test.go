@@ -1239,8 +1239,10 @@ func TestBug_BufferOverflowFailsClosed(t *testing.T) {
 		"data: {\"seq\":3}\n\n"
 
 	w := httptest.NewRecorder()
-	buffer := NewBufferedSSEWriter(w, 2, 30*time.Second,
-		"t", "s", "m", types.APITypeOpenAICompletion, nil)
+	buffer := NewBufferedSSEWriter(w,
+		SSEBufferConfig{MaxEvents: 2, Timeout: 30 * time.Second},
+		SSERequestContext{TraceID: "t", SessionID: "s", Model: "m", APIType: types.APITypeOpenAICompletion, Tools: nil},
+	)
 
 	// Replicate the new fail-closed overflow logic
 	data := []byte(stream)

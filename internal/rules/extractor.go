@@ -916,20 +916,19 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 			info.EvasiveReason = "blocked: " + strings.Join(reasons, ", ") + ": " + cmd
 		}
 
-		// Try parsing as bash. On Windows only, if bash parsing fails and the
-		// command looks like PowerShell, apply PS pre-processing (substitute
-		// $var references, normalize backslash paths) and retry. PowerShell
-		// commands only run on Windows, so the transformation is intentionally
-		// a no-op on Linux/macOS — this also prevents a bypass where the broad
-		// psVarAssignRe regex matches bash-like $var="value" syntax on non-Windows
-		// hosts and rescues a malformed command from the evasion check.
-		file, err := parser.Parse(strings.NewReader(cmd), "")
-		if err != nil && runtime.GOOS == goosWindows && looksLikePowerShell(cmd) {
-			transformed := normalizePSBackslashPaths(substitutePSVariables(cmd))
-			if retryFile, retryErr := parser.Parse(strings.NewReader(transformed), ""); retryErr == nil {
-				cmd, file, err = transformed, retryFile, nil
-			}
+		// On Windows, pre-process PowerShell commands before bash parsing:
+		// substitute $var references with their assigned values and normalize
+		// backslash paths to forward slashes. This allows the bash parser to
+		// correctly extract paths from PowerShell syntax that is otherwise valid
+		// (e.g. $p="/tmp/.env"; Get-Content $p, or Get-Content C:\Users\x\.env).
+		// Restricted to Windows because the psVarAssignRe regex also matches
+		// bash-style $var="value" assignments — applying the transform on
+		// Linux/macOS would rescue malformed commands from evasion detection.
+		if runtime.GOOS == goosWindows && looksLikePowerShell(cmd) {
+			cmd = substitutePSVariables(cmd)
+			cmd = normalizePSBackslashPaths(cmd)
 		}
+		file, err := parser.Parse(strings.NewReader(cmd), "")
 		if err != nil {
 			// Unparseable non-empty commands are treated as evasive: the rule
 			// engine cannot analyze what it cannot parse, so blocking is the

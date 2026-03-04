@@ -100,7 +100,7 @@ func (i *Interceptor) intercept(
 }
 
 // InterceptOpenAIResponse intercepts tool calls in an OpenAI format response.
-func (i *Interceptor) InterceptOpenAIResponse(responseBody []byte, traceID, sessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
+func (i *Interceptor) InterceptOpenAIResponse(responseBody []byte, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
 	return i.intercept(responseBody, blockMode, func(result *InterceptionResult, useReplaceMode bool) (any, bool) {
 		var resp openAIResponse
 		if err := json.Unmarshal(responseBody, &resp); err != nil {
@@ -144,7 +144,7 @@ func (i *Interceptor) InterceptOpenAIResponse(responseBody []byte, traceID, sess
 }
 
 // InterceptAnthropicResponse intercepts tool calls in an Anthropic format response.
-func (i *Interceptor) InterceptAnthropicResponse(responseBody []byte, traceID, sessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
+func (i *Interceptor) InterceptAnthropicResponse(responseBody []byte, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
 	return i.intercept(responseBody, blockMode, func(result *InterceptionResult, useReplaceMode bool) (any, bool) {
 		var resp anthropicResponse
 		if err := json.Unmarshal(responseBody, &resp); err != nil {
@@ -180,7 +180,7 @@ func (i *Interceptor) InterceptAnthropicResponse(responseBody []byte, traceID, s
 
 // InterceptOpenAIResponsesResponse intercepts tool calls in an OpenAI Responses API format response.
 // The Responses API uses `output[]` with `type: "function_call"` items.
-func (i *Interceptor) InterceptOpenAIResponsesResponse(responseBody []byte, traceID, sessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
+func (i *Interceptor) InterceptOpenAIResponsesResponse(responseBody []byte, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
 	return i.intercept(responseBody, blockMode, func(result *InterceptionResult, useReplaceMode bool) (any, bool) {
 		var resp openAIResponsesResponse
 		if err := json.Unmarshal(responseBody, &resp); err != nil {
@@ -222,7 +222,7 @@ func (i *Interceptor) InterceptOpenAIResponsesResponse(responseBody []byte, trac
 
 // InterceptToolCalls intercepts tool calls based on API type
 // blockMode: types.BlockModeRemove (delete tool calls) or types.BlockModeReplace (substitute with a text warning block)
-func (i *Interceptor) InterceptToolCalls(responseBody []byte, traceID, sessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
+func (i *Interceptor) InterceptToolCalls(responseBody []byte, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, blockMode types.BlockMode) (*InterceptionResult, error) {
 	switch apiType {
 	case types.APITypeAnthropic:
 		return i.InterceptAnthropicResponse(responseBody, traceID, sessionID, model, apiType, blockMode)
@@ -241,7 +241,9 @@ func (i *Interceptor) InterceptToolCalls(responseBody []byte, traceID, sessionID
 func (i *Interceptor) evaluateToolCall(
 	result *InterceptionResult,
 	tc telemetry.ToolCall,
-	traceID, sessionID, argsString string,
+	traceID types.TraceID,
+	sessionID types.SessionID,
+	argsString string,
 	apiType types.APIType,
 	model string,
 	useReplaceMode bool,

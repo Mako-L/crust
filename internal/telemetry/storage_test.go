@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/telemetry/db"
+	"github.com/BakeLens/crust/internal/types"
 )
 
 func newTestStorage(t *testing.T) *Storage {
@@ -104,7 +105,7 @@ func TestGetOrCreateTrace_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, errs[idx] = s.GetOrCreateTrace(traceID, fmt.Sprintf("session-%d", idx))
+			_, errs[idx] = s.GetOrCreateTrace(traceID, types.SessionID(fmt.Sprintf("session-%d", idx)))
 		}(i)
 	}
 	wg.Wait()
@@ -304,9 +305,9 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; ctx.Err() == nil; i++ {
-			traceID := fmt.Sprintf("trace-%d", i)
+			traceID := types.TraceID(fmt.Sprintf("trace-%d", i))
 			mainSpan := &Span{
-				SpanID:    fmt.Sprintf("s-%d", i),
+				SpanID:    types.SpanID(fmt.Sprintf("s-%d", i)),
 				Name:      "llm",
 				SpanKind:  SpanKindLLM,
 				StartTime: time.Now(),
@@ -352,7 +353,7 @@ func TestGetSessions_GroupsBySessionID(t *testing.T) {
 	// Insert tool calls for two distinct sessions
 	for i := range 3 {
 		err := s.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-a-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-a-%d", i)),
 			SessionID: "session-alpha",
 			ToolName:  "Read",
 			Model:     "claude-opus-4-5",
@@ -383,7 +384,7 @@ func TestGetSessions_GroupsBySessionID(t *testing.T) {
 
 	// Sessions are ordered by last_seen DESC — both are recent so order may vary;
 	// find each by SessionID.
-	byID := make(map[string]SessionSummary, 2)
+	byID := make(map[types.SessionID]SessionSummary, 2)
 	for _, ss := range sessions {
 		byID[ss.SessionID] = ss
 	}
@@ -485,7 +486,7 @@ func TestGetSessionEvents_FiltersBySessionID(t *testing.T) {
 	// Insert events for two sessions
 	for i := range 5 {
 		if err := s.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-x-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-x-%d", i)),
 			SessionID: "session-x",
 			ToolName:  "Read",
 		}); err != nil {
@@ -494,7 +495,7 @@ func TestGetSessionEvents_FiltersBySessionID(t *testing.T) {
 	}
 	for i := range 2 {
 		if err := s.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-y-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-y-%d", i)),
 			SessionID: "session-y",
 			ToolName:  "Bash",
 		}); err != nil {
@@ -521,7 +522,7 @@ func TestGetSessionEvents_RespectsLimit(t *testing.T) {
 
 	for i := range 20 {
 		if err := s.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-%d", i)),
 			SessionID: "session-limit",
 			ToolName:  "Read",
 		}); err != nil {
@@ -576,8 +577,8 @@ func TestGetSessions_LimitEnforced(t *testing.T) {
 
 	for i := range 10 {
 		if err := s.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-%d", i),
-			SessionID: fmt.Sprintf("session-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-%d", i)),
+			SessionID: types.SessionID(fmt.Sprintf("session-%d", i)),
 			ToolName:  "Read",
 		}); err != nil {
 			t.Fatal(err)
@@ -728,7 +729,7 @@ func TestNewStorage_CorruptSHMDoesNotLoseMainDB(t *testing.T) {
 	}
 	for i := range 5 {
 		if err := s1.LogToolCall(ToolCallLog{
-			TraceID:   fmt.Sprintf("trace-%d", i),
+			TraceID:   types.TraceID(fmt.Sprintf("trace-%d", i)),
 			SessionID: "s1",
 			ToolName:  "Read",
 		}); err != nil {
@@ -791,7 +792,7 @@ func TestLogToolCall_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for range 10 {
 				err := s.LogToolCall(ToolCallLog{
-					TraceID:  fmt.Sprintf("trace-%d", idx),
+					TraceID:  types.TraceID(fmt.Sprintf("trace-%d", idx)),
 					ToolName: "Bash",
 					Layer:    "L1",
 				})

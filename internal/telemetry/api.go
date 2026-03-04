@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/BakeLens/crust/internal/api"
+	"github.com/BakeLens/crust/internal/types"
 )
 
 // SessionsQuery represents query parameters for the sessions endpoint.
@@ -64,7 +65,7 @@ func (h *APIHandler) HandleSessionEvents(c *gin.Context) {
 		query.Limit = 50
 	}
 
-	events, err := h.storage.GetSessionEvents(sessionID, query.Limit)
+	events, err := h.storage.GetSessionEvents(types.SessionID(sessionID), query.Limit)
 	if err != nil {
 		api.Error(c, http.StatusInternalServerError, "Failed to get session events")
 		return
@@ -157,7 +158,7 @@ func (h *APIHandler) HandleTrace(c *gin.Context) {
 	}
 
 	// Get spans for this trace
-	spans, err := h.storage.GetTraceSpans(traceID)
+	spans, err := h.storage.GetTraceSpans(types.TraceID(traceID))
 	if err != nil {
 		api.Error(c, http.StatusInternalServerError, "Failed to get spans")
 		return
@@ -178,7 +179,7 @@ func (h *APIHandler) HandleTrace(c *gin.Context) {
 	// Find root span (no parent)
 	var rootSpan *Span
 	for i := range spans {
-		if spans[i].ParentSpanID == "" {
+		if spans[i].ParentSpanID.IsEmpty() {
 			rootSpan = &spans[i]
 			break
 		}

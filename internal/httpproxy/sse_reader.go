@@ -32,13 +32,13 @@ type SSEReader struct {
 	completed  bool
 
 	// Security interception fields
-	traceID   string
-	sessionID string
+	traceID   types.TraceID
+	sessionID types.SessionID
 	model     string
 }
 
 // NewSSEReaderWithSecurity creates a new SSE reader with security interception support
-func NewSSEReaderWithSecurity(body io.ReadCloser, apiType types.APIType, traceID, sessionID, model string, onComplete func(int64, int64, string, []telemetry.ToolCall)) *SSEReader {
+func NewSSEReaderWithSecurity(body io.ReadCloser, apiType types.APIType, traceID types.TraceID, sessionID types.SessionID, model string, onComplete func(int64, int64, string, []telemetry.ToolCall)) *SSEReader {
 	return &SSEReader{
 		reader:     body,
 		apiType:    apiType,

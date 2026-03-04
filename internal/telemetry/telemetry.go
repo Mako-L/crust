@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/BakeLens/crust/internal/types"
 )
 
 const (
@@ -47,7 +49,8 @@ type ToolCall struct {
 
 // LLMSpanData contains all data to record for an LLM request
 type LLMSpanData struct {
-	TraceID      string          // From X-Trace-ID header
+	TraceID      types.TraceID   // From X-Trace-ID header
+	SessionID    types.SessionID // Derived from request messages
 	SpanKind     string          // LLM, TOOL
 	SpanName     string          // Custom span name
 	Model        string          // Requested model name
@@ -64,8 +67,8 @@ type LLMSpanData struct {
 
 // SpanContext holds span timing information
 type SpanContext struct {
-	TraceID   string
-	SpanID    string
+	TraceID   types.TraceID
+	SpanID    types.SpanID
 	Name      string
 	StartTime time.Time
 }
@@ -134,7 +137,7 @@ func GetGlobalStorage() *Storage {
 }
 
 // StartLLMSpan starts a new span for an LLM request
-func (p *Provider) StartLLMSpan(ctx context.Context, operationName string, traceID string, spanName string) (context.Context, *SpanContext) {
+func (p *Provider) StartLLMSpan(ctx context.Context, operationName string, traceID types.TraceID, spanName string) (context.Context, *SpanContext) {
 	if p == nil || !p.enabled {
 		return ctx, nil
 	}
@@ -145,7 +148,7 @@ func (p *Provider) StartLLMSpan(ctx context.Context, operationName string, trace
 
 	spanCtx := &SpanContext{
 		TraceID:   traceID,
-		SpanID:    generateSpanID(),
+		SpanID:    types.SpanID(generateSpanID()),
 		Name:      operationName,
 		StartTime: time.Now(),
 	}
@@ -221,13 +224,13 @@ func (p *Provider) EndLLMSpan(spanCtx *SpanContext, data LLMSpanData) {
 	}
 
 	// Record everything atomically in a single transaction
-	if err := storage.RecordSpanTx(data.TraceID, data.TraceID, mainSpan, toolSpans); err != nil {
+	if err := storage.RecordSpanTx(data.TraceID, data.SessionID, mainSpan, toolSpans); err != nil {
 		log.Debug("[TELEMETRY] Failed to record span: %v", err)
 	}
 }
 
 // buildToolSpan creates a Span struct for a tool call without writing to the DB.
-func (p *Provider) buildToolSpan(parentSpanID string, traceID string, tc ToolCall) *Span {
+func (p *Provider) buildToolSpan(parentSpanID types.SpanID, traceID types.TraceID, tc ToolCall) *Span {
 	attrs := map[string]any{
 		AttrSpanKind:       SpanKindTool,
 		AttrToolName:       tc.Name,
@@ -240,7 +243,7 @@ func (p *Provider) buildToolSpan(parentSpanID string, traceID string, tc ToolCal
 	}
 
 	return &Span{
-		SpanID:       generateSpanID(),
+		SpanID:       types.SpanID(generateSpanID()),
 		ParentSpanID: parentSpanID,
 		Name:         "tool:" + tc.Name,
 		SpanKind:     SpanKindTool,

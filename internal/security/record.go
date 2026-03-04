@@ -18,8 +18,8 @@ const (
 // Event represents a tool call evaluation event at any layer.
 type Event struct {
 	Layer      string // LayerL0, LayerL1, LayerL1Stream, LayerL1Buffer
-	TraceID    string
-	SessionID  string
+	TraceID    types.TraceID
+	SessionID  types.SessionID
 	ToolName   string
 	Arguments  json.RawMessage
 	APIType    types.APIType

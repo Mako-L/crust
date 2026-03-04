@@ -46,8 +46,8 @@ type BufferedSSEWriter struct {
 	timeout         time.Duration
 
 	// Metadata for security evaluation
-	traceID   string
-	sessionID string
+	traceID   types.TraceID
+	sessionID types.SessionID
 	model     string
 	apiType   types.APIType
 
@@ -62,7 +62,7 @@ type BufferedSSEWriter struct {
 }
 
 // NewBufferedSSEWriter creates a buffered SSE writer
-func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID, sessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
+func NewBufferedSSEWriter(w http.ResponseWriter, maxSize int, timeout time.Duration, traceID types.TraceID, sessionID types.SessionID, model string, apiType types.APIType, tools []AvailableTool) *BufferedSSEWriter {
 	flusher, _ := w.(http.Flusher)
 
 	// Build tool lookup map

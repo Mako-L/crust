@@ -137,6 +137,36 @@ func (m BlockMode) IsReplace() bool { return m == BlockModeReplace }
 // IsRemove returns true if blocked calls should be removed from the response.
 func (m BlockMode) IsRemove() bool { return m == BlockModeRemove }
 
+// TraceID uniquely identifies a request trace (sourced from X-Trace-Id header or W3C traceparent).
+// Using a named type prevents accidental confusion with SessionID or SpanID.
+type TraceID string
+
+// String implements fmt.Stringer.
+func (t TraceID) String() string { return string(t) }
+
+// IsEmpty returns true if the TraceID is unset.
+func (t TraceID) IsEmpty() bool { return t == "" }
+
+// SessionID identifies a conversation session (derived from message content; falls back to TraceID).
+// Using a named type prevents accidental confusion with TraceID or SpanID.
+type SessionID string
+
+// String implements fmt.Stringer.
+func (s SessionID) String() string { return string(s) }
+
+// IsEmpty returns true if the SessionID is unset.
+func (s SessionID) IsEmpty() bool { return s == "" }
+
+// SpanID identifies a single operation span within a trace.
+// Using a named type prevents accidental confusion with TraceID or SessionID.
+type SpanID string
+
+// String implements fmt.Stringer.
+func (s SpanID) String() string { return string(s) }
+
+// IsEmpty returns true if the SpanID is unset.
+func (s SpanID) IsEmpty() bool { return s == "" }
+
 // LogLevel represents a log verbosity level.
 type LogLevel string
 

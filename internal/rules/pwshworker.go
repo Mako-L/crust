@@ -61,20 +61,16 @@ while ($true) {
             if ($null -eq $block) { continue }
             foreach ($stmt in $block.Statements) {
                 # Record direct-scope $var = "literal" before processing this statement's commands.
-                # AssignmentStatementAst.Right is a PipelineAst wrapping a CommandExpressionAst;
-                # navigate the wrapper to reach the underlying StringConstantExpressionAst value.
+                # AssignmentStatementAst.Right is a CommandExpressionAst (not PipelineAst);
+                # navigate Right.Expression to reach the StringConstantExpressionAst value.
                 if ($stmt -is [System.Management.Automation.Language.AssignmentStatementAst]) {
                     try {
-                        $lhs  = $stmt.Left
-                        $pipe = $stmt.Right
+                        $lhs = $stmt.Left
+                        $rhs = $stmt.Right
                         if ($lhs -is [System.Management.Automation.Language.VariableExpressionAst] -and
-                            $pipe -is [System.Management.Automation.Language.PipelineAst] -and
-                            $pipe.PipelineElements.Count -eq 1 -and
-                            $pipe.PipelineElements[0] -is [System.Management.Automation.Language.CommandExpressionAst]) {
-                            $rhs = $pipe.PipelineElements[0].Expression
-                            if ($rhs -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                $vars[$lhs.VariablePath.UserPath] = $rhs.Value
-                            }
+                            $rhs -is [System.Management.Automation.Language.CommandExpressionAst] -and
+                            $rhs.Expression -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                            $vars[$lhs.VariablePath.UserPath] = $rhs.Expression.Value
                         }
                     } catch {}
                 }

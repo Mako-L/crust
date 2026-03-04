@@ -95,9 +95,13 @@ while ($true) {
                                 } elseif ($_ -is [System.Management.Automation.Language.CommandParameterAst]) {
                                     $ag.Add('-' + $_.ParameterName)
                                     # -Flag:value colon syntax: Argument holds the value expression.
-                                    if ($null -ne $_.Argument -and
-                                        $_.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                        $ag.Add($_.Argument.Value)
+                                    if ($null -ne $_.Argument) {
+                                        if ($_.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                                            $ag.Add($_.Argument.Value)
+                                        } elseif ($_.Argument -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                            $k = $_.Argument.VariablePath.UserPath
+                                            if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
+                                        }
                                     }
                                 }
                             } catch { $null = $_ }

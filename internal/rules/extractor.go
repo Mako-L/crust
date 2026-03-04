@@ -1249,8 +1249,12 @@ func (e *Extractor) parsePowerShellInnerCommand(info *ExtractedInfo, innerCmd st
 
 	// Attempt 2: pwsh worker — authoritative PS AST parser (Windows only).
 	if e.pwshWorker != nil {
-		if psResp, psErr := e.pwshWorker.parse(innerCmd); psErr == nil && len(psResp.ParseErrors) == 0 && len(psResp.Commands) > 0 {
-			e.extractFromParsedCommandsDepth(info, psResp.Commands, depth+1, nil)
+		if psResp, psErr := e.pwshWorker.parse(innerCmd); psErr == nil && len(psResp.ParseErrors) == 0 {
+			if len(psResp.Commands) > 0 {
+				e.extractFromParsedCommandsDepth(info, psResp.Commands, depth+1, nil)
+			}
+			// Valid PS with zero commands (comment-only, assignment-only, etc.) is
+			// harmless — return without falling through to the evasive path below.
 			return
 		}
 	}

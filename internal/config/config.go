@@ -128,7 +128,7 @@ type SecurityConfig struct {
 	BufferStreaming bool            `yaml:"buffer_streaming"`  // enable response buffering for streaming requests
 	MaxBufferEvents int             `yaml:"max_buffer_events"` // maximum number of SSE events to buffer (default: 5000)
 	BufferTimeout   int             `yaml:"buffer_timeout"`    // buffer timeout in seconds (default: 60)
-	BlockMode       types.BlockMode `yaml:"block_mode"`        // "remove" (default) or "replace" (substitute with echo command)
+	BlockMode       types.BlockMode `yaml:"block_mode"`        // "remove" (default) or "replace" (substitute with a text warning block)
 }
 
 // Validate validates the SecurityConfig and sets defaults.

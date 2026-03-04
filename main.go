@@ -177,7 +177,7 @@ func runStart(args []string) {
 	listenAddr := startFlags.String("listen-address", "", "Bind address for the proxy server (default 127.0.0.1)")
 	telemetryEnabled := startFlags.Bool("telemetry", false, "Enable telemetry")
 	retentionDays := startFlags.Int("retention-days", 0, "Telemetry retention in days (0=use config default)")
-	blockMode := startFlags.String("block-mode", "", "Block mode: remove (delete tool calls) or replace (substitute with echo)")
+	blockMode := startFlags.String("block-mode", "", "Block mode: remove (delete tool calls) or replace (substitute with a text warning block)")
 
 	_ = startFlags.Parse(args)
 

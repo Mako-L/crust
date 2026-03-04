@@ -58,7 +58,7 @@ API key values support `$VAR` and `${VAR}` environment variable expansion. This 
 | Mode | Behavior |
 |------|----------|
 | `remove` (default) | Dangerous tool calls are removed; a `[Crust]` warning with the block reason is injected into the response |
-| `replace` | Dangerous tool calls are replaced with an echo command explaining what was blocked |
+| `replace` | Dangerous tool calls are replaced with a text warning block explaining what was blocked |
 
 Both modes deliver agent-friendly messages that explain *why* a tool call was blocked and include a "Do not retry" directive to prevent the agent from re-attempting the same action.
 

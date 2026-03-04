@@ -52,7 +52,7 @@ Crust is a transparent, local gateway between your AI agents and LLM providers. 
   <img src="docs/crust.png" alt="Crust architecture" width="90%" />
 </p>
 
-Crust has four entry points — use one or combine them:
+Crust has five entry points — use one or combine them:
 
 | Entry Point | Command | What It Does |
 |-------------|---------|--------------|
@@ -60,6 +60,7 @@ Crust has four entry points — use one or combine them:
 | **MCP Stdio Gateway** | `crust mcp gateway` | Wraps any stdio [MCP](https://modelcontextprotocol.io) server, intercepting `tools/call` and `resources/read` in both directions — including DLP scanning of server responses for leaked secrets. |
 | **MCP HTTP Gateway** | `crust mcp http` | Reverse proxy for [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) MCP servers — same rule engine, no stdio required. |
 | **ACP Stdio Proxy** | `crust acp-wrap` | Wraps any [ACP](https://agentclientprotocol.com) agent, intercepting file reads, writes, and terminal commands before the IDE executes them. |
+| **Auto-detect** | `crust wrap` | Inspects both MCP and ACP methods simultaneously — use when you don't know which protocol a subprocess speaks. |
 
 All entry points apply the same [13-step evaluation pipeline](docs/how-it-works.md) — self-protection, input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path normalization, symlink resolution, and rule matching — each step in microseconds.
 
@@ -159,7 +160,7 @@ Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup gui
 
 ### Built-in Rules
 
-Crust ships with **23 security rules** (16 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
+Crust ships with **26 security rules** (19 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
 
 | Category | What's Protected |
 |----------|-----------------|

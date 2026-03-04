@@ -49,7 +49,7 @@ import (
 )
 
 // Version is set at build time via ldflags: -X main.Version=x.y.z
-var Version = "3.0.0"
+var Version = "dev"
 
 var log = logger.New("main")
 

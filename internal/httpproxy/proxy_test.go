@@ -3,6 +3,7 @@ package httpproxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1232,7 +1233,22 @@ func TestAgent_OpenAIResponses_Streaming(t *testing.T) {
 // through the rule engine via FlushModified() and drops uninspected overflow
 // events (fail-closed). Previously FlushAll() sent events without evaluation
 // and io.Copy streamed the remainder unfiltered — a security bypass.
-func TestBug_BufferOverflowFailsClosed(t *testing.T) {
+// injectOverflowWarning is a test helper that writes a truncation SSE comment.
+// Production code uses retryAsNonStreaming instead; this is kept for unit tests
+// that verify the BufferedSSEWriter fail-closed API contract directly.
+func injectOverflowWarning(w http.ResponseWriter) {
+	const warning = "[Crust] Response truncated: buffer limit exceeded. Some content may be missing."
+	_, _ = fmt.Fprintf(w, ": %s\n\n", warning)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// TestBufferedSSEWriter_OverflowFailsClosed tests the BufferedSSEWriter unit API:
+// when the buffer overflows, FlushModified sends only buffered events (not the one
+// that caused the overflow). This is the fail-closed security property.
+// Note: production integration uses retryAsNonStreaming on overflow, not this path.
+func TestBufferedSSEWriter_OverflowFailsClosed(t *testing.T) {
 	// 3-event stream; buffer holds only 2 events → 3rd triggers overflow
 	stream := "data: {\"seq\":1}\n\n" +
 		"data: {\"seq\":2}\n\n" +
@@ -1288,6 +1304,56 @@ func TestBug_BufferOverflowFailsClosed(t *testing.T) {
 	// Truncation warning must be present
 	if !strings.Contains(clientReceived, "[Crust] Response truncated") {
 		t.Error("missing overflow truncation warning")
+	}
+}
+
+// TestRetryAsNonStreaming_RespectsClientContext verifies that retryAsNonStreaming
+// uses the original request context, so a canceled client context cancels the
+// retry (preventing it from blocking after client disconnect).
+func TestRetryAsNonStreaming_RespectsClientContext(t *testing.T) {
+	// Upstream server that hangs until its context is canceled.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // block until the request context is canceled
+		http.Error(w, "canceled", http.StatusGatewayTimeout)
+	}))
+	defer upstream.Close()
+
+	proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	clientCtx, cancelClient := context.WithCancel(context.Background())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"stream":true}`))
+	req = req.WithContext(clientCtx)
+	req.Header.Set("Content-Type", "application/json")
+	upstreamReq, err := http.NewRequestWithContext(clientCtx, http.MethodPost, upstream.URL+"/v1/messages",
+		strings.NewReader(`{"stream":false}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	rctx := &RequestContext{
+		Writer:      httptest.NewRecorder(),
+		Request:     req,
+		UpstreamReq: upstreamReq,
+		RequestBody: []byte(`{"stream":true}`),
+		APIType:     types.APITypeAnthropic,
+	}
+
+	// Cancel the client context immediately — retryAsNonStreaming must not block.
+	cancelClient()
+
+	start := time.Now()
+	_, _, _, _, statusCode := proxy.retryAsNonStreaming(rctx)
+	elapsed := time.Since(start)
+
+	if elapsed > 5*time.Second {
+		t.Errorf("retryAsNonStreaming blocked for %v after client context canceled (want <5s)", elapsed)
+	}
+	if statusCode == http.StatusOK {
+		t.Error("expected non-200 status when client context is canceled, got 200")
 	}
 }
 

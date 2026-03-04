@@ -897,8 +897,8 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 	}
 
 	// Parse each command once, then reuse the AST for both minPrinting and
-	// Runner execution. Only mark evasive if NO field parsed successfully —
-	// a secondary field may contain non-shell text (e.g., "script": "...").
+	// Runner execution. Mark evasive on ANY suspicious input or parse failure —
+	// the engine cannot analyze what it cannot parse, so blocking is the safe default.
 	parser := syntax.NewParser(syntax.KeepComments(false), syntax.Variant(syntax.LangBash))
 
 	var printed []string

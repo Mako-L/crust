@@ -654,7 +654,7 @@ readLoop:
 					raw := data[:idx+4]
 					eventType, jsonData := parseSSEEventData(eventData)
 					if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-						log.Warn("Buffer overflow: %v — falling back to non-streaming retry", err)
+						log.Warn("[BUFFERED] %v — falling back to non-streaming retry", err)
 						if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
 							log.Debug("Failed to drain upstream response: %v", drainErr)
 						}
@@ -669,7 +669,7 @@ readLoop:
 				raw := data[:idx+2]
 				eventType, jsonData := parseSSEEventData(eventData)
 				if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-					log.Warn("Buffer overflow: %v — falling back to non-streaming retry", err)
+					log.Warn("[BUFFERED] %v — falling back to non-streaming retry", err)
 					if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
 						log.Debug("Failed to drain upstream response: %v", drainErr)
 					}
@@ -769,7 +769,7 @@ func (p *Proxy) retryAsNonStreaming(ctx *RequestContext) (responseBody json.RawM
 	log.Warn("[BUFFERED] Retrying as non-streaming for full security evaluation")
 
 	nonStreamBody := forceNonStreaming(ctx.RequestBody)
-	retryReq := ctx.UpstreamReq.Clone(context.Background())
+	retryReq := ctx.UpstreamReq.Clone(ctx.Request.Context())
 	retryReq.Body = io.NopCloser(bytes.NewReader(nonStreamBody))
 	retryReq.ContentLength = int64(len(nonStreamBody))
 	retryReq.Header.Del("Content-Encoding") // body is now uncompressed JSON
@@ -811,18 +811,6 @@ func forceNonStreaming(body []byte) []byte {
 	}
 	b := buf.Bytes()
 	return b[:len(b)-1] // strip trailing newline added by json.Encoder
-}
-
-// stripAPIPrefix removes a leading "/api" segment from the request path.
-// injectOverflowWarning writes a truncation warning to the SSE stream when
-// the buffer overflows. This tells the AI agent that the response was cut short.
-func injectOverflowWarning(w http.ResponseWriter) {
-	const warning = "[Crust] Response truncated: buffer limit exceeded. Some content may be missing."
-	// Write as an SSE comment — parseable by all SSE clients, ignored by event handlers.
-	_, _ = fmt.Fprintf(w, ": %s\n\n", warning)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
 }
 
 // Some IDE clients prepend /api/ when targeting an OpenAI-compatible

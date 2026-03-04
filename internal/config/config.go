@@ -126,8 +126,8 @@ type TelemetryConfig struct {
 type SecurityConfig struct {
 	Enabled         bool            `yaml:"enabled"`           // enable security interception (uses rules engine)
 	BufferStreaming bool            `yaml:"buffer_streaming"`  // enable response buffering for streaming requests
-	MaxBufferEvents int             `yaml:"max_buffer_events"` // maximum number of SSE events to buffer (default: 5000)
-	BufferTimeout   int             `yaml:"buffer_timeout"`    // buffer timeout in seconds (default: 60)
+	MaxBufferEvents int             `yaml:"max_buffer_events"` // maximum SSE events to buffer before non-streaming retry (default: 50000; covers ~64K-token responses)
+	BufferTimeout   int             `yaml:"buffer_timeout"`    // buffer timeout in seconds (default: 120)
 	BlockMode       types.BlockMode `yaml:"block_mode"`        // "remove" (default) or "replace" (substitute with a text warning block)
 }
 
@@ -209,7 +209,7 @@ func DefaultConfig() *Config {
 		Security: SecurityConfig{
 			Enabled:         true,
 			BufferStreaming: true, // enabled by default for security
-			MaxBufferEvents: 5000,
+			MaxBufferEvents: 50000,
 			BufferTimeout:   120,
 			BlockMode:       types.BlockModeRemove,
 		},

@@ -564,7 +564,9 @@ func (p *Proxy) handleStreamingRequest(ctx *RequestContext) {
 	proxy.ServeHTTP(ctx.Writer, ctx.Request) //nolint:gosec // reverse proxy by design forwards client requests
 }
 
-// handleBufferedStreamingRequest handles SSE streaming with response buffering for security evaluation
+// handleBufferedStreamingRequest handles SSE streaming with response buffering for security evaluation.
+// Headers are not written to the client until buffering completes, so that on buffer overflow we can
+// fall back to a non-streaming retry (option 3) without having committed to SSE framing.
 func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg security.InterceptionConfig) {
 	// Make the upstream request
 	resp, err := p.doRequest(ctx.UpstreamReq)
@@ -586,7 +588,7 @@ func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg secur
 	}
 	defer resp.Body.Close()
 
-	// For non-2xx responses, log and proxy through
+	// For non-2xx responses, log and proxy through immediately.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Info("%s %s model=%s → %s status=%d duration=%v [stream-error]",
 			ctx.Request.Method, ctx.Request.URL.Path, ctx.Model, ctx.TargetURL, resp.StatusCode, time.Since(ctx.StartTime))
@@ -596,7 +598,12 @@ func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg secur
 		return
 	}
 
-	// Create buffered SSE writer with available tools
+	// Save upstream headers/status — we defer writing them to the client until
+	// buffering finishes so we can switch to non-streaming format on overflow.
+	savedStatus := resp.StatusCode
+	savedHeaders := resp.Header.Clone()
+
+	// Create buffered SSE writer with available tools.
 	timeout := time.Duration(secCfg.BufferTimeout) * time.Second
 	availableTools := make([]AvailableTool, 0, len(ctx.Tools))
 	for _, t := range ctx.Tools {
@@ -611,14 +618,10 @@ func (p *Proxy) handleBufferedStreamingRequest(ctx *RequestContext, secCfg secur
 	}
 	buffer := NewBufferedSSEWriter(ctx.Writer, secCfg.MaxBufferEvents, timeout, ctx.TraceID, ctx.SessionID, ctx.Model, ctx.APIType, availableTools)
 
-	// Copy response headers and status code before buffering
-	copyHeaders(ctx.Writer.Header(), resp.Header)
-	ctx.Writer.WriteHeader(resp.StatusCode)
-
-	// Get interceptor early to avoid goto issues
+	// Get interceptor early to avoid goto issues.
 	interceptor := security.GetGlobalInterceptor()
 
-	// Read and buffer SSE events
+	// Read and buffer SSE events. Headers are NOT written to the client yet.
 	bufferOverflowed := false
 	reader := &bytes.Buffer{}
 	buf := make([]byte, 4096)
@@ -629,7 +632,7 @@ readLoop:
 		if n > 0 {
 			reader.Write(buf[:n])
 
-			// Process complete SSE events
+			// Process complete SSE events.
 			for {
 				data := reader.Bytes()
 				idx := bytes.Index(data, []byte("\n\n"))
@@ -638,18 +641,11 @@ readLoop:
 					if idx == -1 {
 						break
 					}
-					// Process event with \r\n\r\n separator
 					eventData := data[:idx]
 					raw := data[:idx+4]
 					eventType, jsonData := parseSSEEventData(eventData)
 					if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-						log.Warn("Buffer overflow: %v — evaluating buffered events, dropping remainder (fail-closed)", err)
-						// SECURITY: Evaluate buffered events through rule engine.
-						// Do NOT forward the overflow event or remaining stream — they are uninspected.
-						if flushErr := buffer.FlushModified(interceptor, secCfg.BlockMode); flushErr != nil {
-							log.Error("FlushModified error during overflow: %v", flushErr)
-						}
-						injectOverflowWarning(ctx.Writer)
+						log.Warn("Buffer overflow: %v — falling back to non-streaming retry", err)
 						if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
 							log.Debug("Failed to drain upstream response: %v", drainErr)
 						}
@@ -660,16 +656,11 @@ readLoop:
 					reader.Write(data[idx+4:])
 					continue
 				}
-				// Process event with \n\n separator
 				eventData := data[:idx]
 				raw := data[:idx+2]
 				eventType, jsonData := parseSSEEventData(eventData)
 				if err := buffer.BufferEvent(eventType, jsonData, raw); err != nil {
-					log.Warn("Buffer overflow: %v — evaluating buffered events, dropping remainder (fail-closed)", err)
-					if flushErr := buffer.FlushModified(interceptor, secCfg.BlockMode); flushErr != nil {
-						log.Error("FlushModified error during overflow: %v", flushErr)
-					}
-					injectOverflowWarning(ctx.Writer)
+					log.Warn("Buffer overflow: %v — falling back to non-streaming retry", err)
 					if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
 						log.Debug("Failed to drain upstream response: %v", drainErr)
 					}
@@ -689,17 +680,40 @@ readLoop:
 		}
 	}
 
-	// Flush any remaining data in the reader buffer that wasn't terminated
-	// by \n\n. This handles the case where the server closes the connection
-	// right after the last event (e.g., response.completed) without a
-	// trailing blank line — the event would otherwise be silently dropped.
-	if !bufferOverflowed && reader.Len() > 0 {
-		remaining := reader.Bytes()
-		remaining = bytes.TrimRight(remaining, "\r\n")
+	// Buffer overflow: retry the same request with stream=false.
+	// Because we haven't written any headers yet, the client still sees a normal response.
+	if bufferOverflowed {
+		responseBody, inputTokens, outputTokens, toolCalls, statusCode := p.retryAsNonStreaming(ctx)
+		duration := time.Since(ctx.StartTime)
+		log.Info("%s %s model=%s → %s status=%d duration=%v tokens=%d/%d tools=%d [stream→non-stream fallback]",
+			ctx.Request.Method, ctx.Request.URL.Path, ctx.Model, ctx.TargetURL, statusCode, duration, inputTokens, outputTokens, len(toolCalls))
+		if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
+			ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
+				TraceID:      ctx.TraceID,
+				SessionID:    ctx.SessionID,
+				SpanKind:     ctx.SpanKind,
+				SpanName:     ctx.SpanName,
+				Model:        ctx.Model,
+				TargetURL:    ctx.TargetURL,
+				Messages:     ctx.RequestBody,
+				Response:     responseBody,
+				ToolCalls:    toolCalls,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+				Latency:      duration,
+				StatusCode:   statusCode,
+				IsStreaming:  false,
+			})
+		}
+		return
+	}
+
+	// Buffer complete: handle trailing unterminated event, then write headers and flush.
+	if reader.Len() > 0 {
+		remaining := bytes.TrimRight(reader.Bytes(), "\r\n")
 		if len(remaining) > 0 {
 			eventType, jsonData := parseSSEEventData(remaining)
-			raw := reader.Bytes() // include original whitespace
-			// Ensure raw ends with \n\n for proper SSE formatting
+			raw := reader.Bytes()
 			if !bytes.HasSuffix(raw, []byte("\n\n")) {
 				raw = append(raw, '\n', '\n')
 			}
@@ -711,20 +725,18 @@ readLoop:
 		}
 	}
 
-	// Evaluate and flush if we didn't overflow
-	if !bufferOverflowed {
-		if err := buffer.FlushModified(interceptor, secCfg.BlockMode); err != nil {
-			log.Error("Flush error: %v", err)
-		}
+	// Now safe to commit headers to the client and stream evaluated events.
+	copyHeaders(ctx.Writer.Header(), savedHeaders)
+	ctx.Writer.WriteHeader(savedStatus)
+	if err := buffer.FlushModified(interceptor, secCfg.BlockMode); err != nil {
+		log.Error("Flush error: %v", err)
 	}
 
-	// Log telemetry
+	// Log telemetry.
 	duration := time.Since(ctx.StartTime)
 	toolCalls := buffer.GetToolCalls()
-
 	log.Info("%s %s model=%s → %s status=%d duration=%v tools=%d [buffered-stream]",
-		ctx.Request.Method, ctx.Request.URL.Path, ctx.Model, ctx.TargetURL, resp.StatusCode, duration, len(toolCalls))
-
+		ctx.Request.Method, ctx.Request.URL.Path, ctx.Model, ctx.TargetURL, savedStatus, duration, len(toolCalls))
 	if ctx.Provider != nil && ctx.Provider.IsEnabled() && ctx.SpanCtx != nil {
 		ctx.Provider.EndLLMSpan(ctx.SpanCtx, telemetry.LLMSpanData{
 			TraceID:     ctx.TraceID,
@@ -736,10 +748,56 @@ readLoop:
 			Messages:    ctx.RequestBody,
 			ToolCalls:   toolCalls,
 			Latency:     duration,
-			StatusCode:  resp.StatusCode,
+			StatusCode:  savedStatus,
 			IsStreaming: true,
 		})
 	}
+}
+
+// retryAsNonStreaming reissues the request with stream=false and writes the evaluated
+// response directly to the client. Used as fallback when the SSE buffer overflows.
+func (p *Proxy) retryAsNonStreaming(ctx *RequestContext) (responseBody json.RawMessage, inputTokens, outputTokens int64, toolCalls []telemetry.ToolCall, statusCode int) {
+	log.Warn("[BUFFERED] Retrying as non-streaming for full security evaluation")
+
+	nonStreamBody := forceNonStreaming(ctx.RequestBody)
+	retryReq := ctx.UpstreamReq.Clone(context.Background())
+	retryReq.Body = io.NopCloser(bytes.NewReader(nonStreamBody))
+	retryReq.ContentLength = int64(len(nonStreamBody))
+	retryReq.Header.Del("Content-Encoding") // body is now uncompressed JSON
+
+	resp, err := p.doRequest(retryReq)
+	if err != nil {
+		log.Error("Non-streaming retry failed: %v", err)
+		http.Error(ctx.Writer, "Bad Gateway", http.StatusBadGateway)
+		return nil, 0, 0, nil, http.StatusBadGateway
+	}
+	defer resp.Body.Close()
+
+	statusCode = resp.StatusCode
+	var rawBody []byte
+	rawBody, inputTokens, outputTokens, toolCalls = processNonStreamingResponse(resp, ctx.APIType, ctx.TraceID, ctx.SessionID, ctx.Model)
+	responseBody = rawBody
+
+	copyHeaders(ctx.Writer.Header(), resp.Header)
+	ctx.Writer.Header().Set("Content-Length", strconv.Itoa(len(rawBody)))
+	ctx.Writer.WriteHeader(statusCode)
+	_, _ = ctx.Writer.Write(rawBody) //nolint:gosec // binary proxy relay; nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
+	return
+}
+
+// forceNonStreaming returns a copy of the JSON body with "stream" set to false.
+// Preserves all other fields exactly via json.RawMessage.
+func forceNonStreaming(body []byte) []byte {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil || raw == nil {
+		return body // best-effort: return unchanged on parse failure or JSON null
+	}
+	raw["stream"] = json.RawMessage("false")
+	result, err := json.Marshal(raw)
+	if err != nil {
+		return body
+	}
+	return result
 }
 
 // stripAPIPrefix removes a leading "/api" segment from the request path.

@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"bytes"
 	sha30 "crypto/sha3"
 	"embed"
 	"encoding/hex"
@@ -376,12 +377,30 @@ func (l *Loader) GetUserDir() string {
 	return l.userDir
 }
 
+// isUnknownFieldError returns true if the error is from yaml.Decoder.KnownFields(true)
+// detecting an unrecognized key (e.g. a removed field like alert_webhook: or a typo).
+func isUnknownFieldError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found in type")
+}
+
 // parseRuleSet parses YAML data into path-based rules using progressive disclosure schema
 func (l *Loader) parseRuleSet(data []byte, path string, source Source) ([]Rule, error) {
 	var ruleSetConfig RuleSetConfig
-	if err := yaml.Unmarshal(data, &ruleSetConfig); err != nil {
-		log.Trace("      YAML parse error: %v", err)
-		return nil, fmt.Errorf("invalid YAML: %w", err)
+	// Try strict decode to catch unknown fields (typos, removed fields like alert_webhook:).
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&ruleSetConfig); err != nil {
+		if isUnknownFieldError(err) {
+			log.Warn("Rule file %s has unknown fields (ignored): %v", path, err)
+			// Re-parse without strict mode for forward compatibility.
+			ruleSetConfig = RuleSetConfig{}
+			if err2 := yaml.Unmarshal(data, &ruleSetConfig); err2 != nil {
+				return nil, fmt.Errorf("invalid YAML: %w", err2)
+			}
+		} else {
+			log.Trace("      YAML parse error: %v", err)
+			return nil, fmt.Errorf("invalid YAML: %w", err)
+		}
 	}
 
 	if err := ruleSetConfig.Validate(); err != nil {

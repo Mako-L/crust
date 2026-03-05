@@ -4,14 +4,12 @@ import (
 	"bufio"
 	"context"
 	_ "embed"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
-	"unicode/utf16"
 )
 
 //go:embed ps_bootstrap_header.ps1
@@ -56,13 +54,13 @@ type Response struct {
 // command analysis. It mirrors the shellWorker pattern: JSON over stdin/stdout,
 // auto-restart on crash, mutex-serialized access.
 type Worker struct {
-	mu       sync.Mutex
-	proc     *exec.Cmd
-	stdin    io.WriteCloser
-	scanner  *bufio.Scanner
-	encoder  *json.Encoder // reused across Parse() calls to avoid per-call allocation
-	pwshPath string        // path to pwsh.exe or powershell.exe
-	encoded  string        // base64 UTF-16LE encoded bootstrap script
+	mu         sync.Mutex
+	proc       *exec.Cmd
+	stdin      io.WriteCloser
+	scanner    *bufio.Scanner
+	encoder    *json.Encoder // reused across Parse() calls to avoid per-call allocation
+	pwshPath   string        // path to pwsh.exe or powershell.exe
+	scriptPath string        // temp file holding the bootstrap script
 }
 
 // FindPwsh returns the path to pwsh.exe or powershell.exe, preferring the
@@ -80,19 +78,35 @@ func FindPwsh() (string, bool) {
 
 // NewWorker creates and starts a pwsh worker subprocess.
 func NewWorker(pwshPath string) (*Worker, error) {
+	// Write the bootstrap script to a temp file instead of passing it as a
+	// base64-encoded -EncodedCommand argument. The bootstrap script is ~13 KB,
+	// which encodes to ~35 KB of base64 — exceeding Windows' 32,767-character
+	// command-line limit and causing "filename or extension too long" errors.
+	f, err := os.CreateTemp("", "crust-ps-bootstrap-*.ps1")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.WriteString(psBootstrapScript); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, err
+	}
+	f.Close()
+
 	w := &Worker{
-		pwshPath: pwshPath,
-		encoded:  encodePSCommand(psBootstrapScript),
+		pwshPath:   pwshPath,
+		scriptPath: f.Name(),
 	}
 	if err := w.start(); err != nil {
+		os.Remove(f.Name())
 		return nil, err
 	}
 	return w, nil
 }
 
 func (w *Worker) start() error {
-	proc := exec.CommandContext(context.Background(), w.pwshPath, //nolint:gosec // pwshPath comes from exec.LookPath, not user input
-		"-NoProfile", "-NonInteractive", "-EncodedCommand", w.encoded)
+	proc := exec.CommandContext(context.Background(), w.pwshPath, //nolint:gosec // pwshPath comes from exec.LookPath, scriptPath from os.CreateTemp
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", w.scriptPath)
 	stdin, err := proc.StdinPipe()
 	if err != nil {
 		return err
@@ -164,20 +178,13 @@ func (w *Worker) kill() {
 	w.scanner = nil
 }
 
-// Stop shuts down the pwsh worker subprocess.
+// Stop shuts down the pwsh worker subprocess and removes the temp bootstrap file.
 func (w *Worker) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.kill() // kill() closes stdin before sending SIGKILL
-}
-
-// encodePSCommand encodes a PowerShell script as base64 UTF-16LE for use
-// with pwsh -EncodedCommand. PowerShell expects little-endian UTF-16.
-func encodePSCommand(s string) string {
-	runes := utf16.Encode([]rune(s))
-	buf := make([]byte, len(runes)*2)
-	for i, r := range runes {
-		binary.LittleEndian.PutUint16(buf[i*2:], r)
+	w.kill()
+	if w.scriptPath != "" {
+		os.Remove(w.scriptPath)
+		w.scriptPath = ""
 	}
-	return base64.StdEncoding.EncodeToString(buf)
 }

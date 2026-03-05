@@ -302,7 +302,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		// Encoding tools (GTFOBins: file-read)
 		"uuencode": {Operation: OpRead, PathArgIndex: []int{0}},
 		"uudecode": {Operation: OpRead, PathArgIndex: []int{0}, PathFlags: []string{"-o"}},
-		"iconv":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, SkipFlags: []string{"-f", "--from-code", "-t", "--to-code", "-o", "--output"}},
+		"iconv":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-o", "--output"}, SkipFlags: []string{"-f", "--from-code", "-t", "--to-code"}},
 
 		// Hashing/checksum tools (must read file to compute hash)
 		"md5sum":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
@@ -331,7 +331,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"sdiff": {Operation: OpRead, PathArgIndex: []int{0, 1}},
 		"diff3": {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"cmp":   {Operation: OpRead, PathArgIndex: []int{0, 1}, SkipFlags: []string{"-n", "--bytes"}},
-		"shuf":  {Operation: OpRead, PathArgIndex: []int{0}, SkipFlags: []string{"-i", "-n", "--input-range", "--head-count", "-o", "--output"}},
+		"shuf":  {Operation: OpRead, PathArgIndex: []int{0}, PathFlags: []string{"-o", "--output"}, SkipFlags: []string{"-i", "-n", "--input-range", "--head-count"}},
 		"split": {Operation: OpRead, PathArgIndex: []int{0}, SkipFlags: []string{"-n", "--number", "-l", "--lines", "-b", "--bytes", "-a", "--suffix-length"}},
 		"tsort": {Operation: OpRead, PathArgIndex: []int{0}},
 
@@ -356,7 +356,6 @@ func defaultCommandDB() map[string]CommandInfo {
 
 		// Additional text tools (read)
 		"tac":      {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
-		"toc":      {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"rev":      {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"nl":       {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"paste":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
@@ -391,23 +390,23 @@ func defaultCommandDB() map[string]CommandInfo {
 
 		// Archive tools (read contents)
 		"tar":     {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}, PathFlags: []string{"-f", "--file"}},
-		"zip":     {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
-		"unzip":   {Operation: OpRead, PathArgIndex: []int{0}},
-		"gzip":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"zip":     {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3}},
+		"unzip":   {Operation: OpWrite, PathArgIndex: []int{0}},
+		"gzip":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"gunzip":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"zcat":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"bzip2":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"bzip2":   {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"bunzip2": {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"bzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"xz":      {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"xz":      {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"xzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"lzma":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"lzma":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"unlzma":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"lzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"zstd":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"zstd":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"unzstd":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"zstdcat": {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"lz4":     {Operation: OpRead, PathArgIndex: []int{0, 1}},
+		"lz4":     {Operation: OpWrite, PathArgIndex: []int{0, 1}},
 		"lz4cat":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"unlz4":   {Operation: OpRead, PathArgIndex: []int{0, 1}},
 		"cpio":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-F", "--file", "-I", "-E"}},
@@ -496,7 +495,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"exiftool":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 
 		// GTFOBins file-write binaries
-		"gdb":    {Operation: OpWrite, PathArgIndex: []int{0, 1}, PathFlags: []string{"-x", "--command", "--core"}},
+		"gdb":    {Operation: OpExecute, PathArgIndex: []int{0, 1}, PathFlags: []string{"-x", "--command", "--core"}},
 		"screen": {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-L", "-Logfile"}},
 		"tmux":   {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"script": {Operation: OpWrite, PathArgIndex: []int{0}},
@@ -640,7 +639,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"ping":           {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"dig":            {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"nslookup":       {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"socat":          {Operation: OpRead, PathArgIndex: []int{0, 1}}, // can read files (socat - /path) and network
+		"socat":          {Operation: OpExecute, PathArgIndex: []int{0, 1}}, // can exec arbitrary processes via EXEC: address
 		"ncat":           {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"aria2c":         {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"http":           {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2}},
@@ -680,7 +679,7 @@ func defaultCommandDB() map[string]CommandInfo {
 
 		// Indirect execution
 		"xargs":  {Operation: OpExecute, PathArgIndex: []int{0, 1, 2}},
-		"find":   {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-exec", "-execdir"}},
+		"find":   {Operation: OpExecute, PathArgIndex: []int{0}},
 		"eval":   {Operation: OpExecute, PathArgIndex: []int{0}},
 		"source": {Operation: OpExecute, PathArgIndex: []int{0}},
 		".":      {Operation: OpExecute, PathArgIndex: []int{0}}, // source alias
@@ -760,7 +759,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"Get-ChildItem":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-Path", "-LiteralPath", "-Filter"}},
 		"gci":              {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-Path", "-LiteralPath", "-Filter"}},
 		"dir":              {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"Select-String":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-Path", "-LiteralPath", "-Pattern"}},
+		"Select-String":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-Path", "-LiteralPath"}, SkipFlags: []string{"-Pattern"}},
 		"sls":              {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-Path", "-LiteralPath"}},
 		"Get-ItemProperty": {Operation: OpRead, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-LiteralPath"}},
 		"Test-Path":        {Operation: OpRead, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-LiteralPath"}},
@@ -775,7 +774,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"Add-Content":      {Operation: OpWrite, PathArgIndex: []int{0, 1}, PathFlags: []string{"-Path", "-LiteralPath", "-Value"}},
 		"ac":               {Operation: OpWrite, PathArgIndex: []int{0, 1}, PathFlags: []string{"-Path", "-LiteralPath"}},
 		"Out-File":         {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-FilePath", "-LiteralPath"}},
-		"New-Item":         {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-Name", "-ItemType"}},
+		"New-Item":         {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-Name"}, SkipFlags: []string{"-ItemType"}},
 		"ni":               {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-Name"}},
 		"Set-ItemProperty": {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-LiteralPath"}},
 		"Clear-Content":    {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-Path", "-LiteralPath"}},
@@ -807,12 +806,12 @@ func defaultCommandDB() map[string]CommandInfo {
 		"iwr":                {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-Uri", "-OutFile"}},
 		"Invoke-RestMethod":  {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-Uri", "-OutFile"}},
 		"irm":                {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-Uri", "-OutFile"}},
-		"Send-MailMessage":   {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-To", "-From", "-SmtpServer", "-Attachments"}},
-		"Test-NetConnection": {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-ComputerName", "-Port"}},
+		"Send-MailMessage":   {Operation: OpNetwork, PathArgIndex: []int{0}, PathFlags: []string{"-Attachments"}, SkipFlags: []string{"-To", "-From", "-SmtpServer"}},
+		"Test-NetConnection": {Operation: OpNetwork, PathArgIndex: []int{0}, SkipFlags: []string{"-ComputerName", "-Port"}},
 		"Resolve-DnsName":    {Operation: OpNetwork, PathArgIndex: []int{0}},
 
 		// Execute operations
-		"Invoke-Expression":      {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-Command"}},
+		"Invoke-Expression":      {Operation: OpExecute, PathArgIndex: []int{0}, SkipFlags: []string{"-Command"}},
 		"iex":                    {Operation: OpExecute, PathArgIndex: []int{0}},
 		"Start-Process":          {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-FilePath", "-ArgumentList"}},
 		"saps":                   {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-FilePath"}},
@@ -1797,7 +1796,6 @@ var wrapperCommands = map[string]bool{
 	// Misc
 	"flock":   true,
 	"busybox": true,
-	"script":  true,
 }
 
 // stdinArgWrappers are commands that read items from stdin and pass them

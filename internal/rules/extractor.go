@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/pathutil"
+	"github.com/BakeLens/crust/internal/rules/pwsh"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -170,12 +171,19 @@ func fieldStrings(val any) []string {
 	return nil
 }
 
+// FindPwsh returns the path to pwsh.exe or powershell.exe, preferring the
+// newer pwsh (PowerShell 7+) over legacy powershell (Windows PowerShell 5.1).
+// This is a package-level convenience wrapper around pwsh.FindPwsh.
+func FindPwsh() (string, bool) {
+	return pwsh.FindPwsh()
+}
+
 // Extractor extracts paths and operations from tool calls
 type Extractor struct {
 	commandDB  map[string]CommandInfo
 	env        map[string]string // process environment for shell expansion
-	worker     *shellWorker      // nil if subprocess isolation is disabled
-	pwshWorker *pwshWorker       // nil on non-Windows or if pwsh not found
+	worker     *shellWorker  // nil if subprocess isolation is disabled
+	pwshWorker *pwsh.Worker // nil on non-Windows or if pwsh not found
 }
 
 // EnableSubprocessIsolation starts a worker subprocess for crash-isolated
@@ -197,7 +205,7 @@ func (e *Extractor) EnableSubprocessIsolation(exePath string) error {
 // site in engine.go is gated behind runtime.GOOS == "windows". Falls back to
 // the heuristic PS transform if this method is not called or returns an error.
 func (e *Extractor) EnablePSWorker(pwshPath string) error {
-	w, err := newPwshWorker(pwshPath)
+	w, err := pwsh.NewWorker(pwshPath)
 	if err != nil {
 		return err
 	}
@@ -212,7 +220,7 @@ func (e *Extractor) Close() {
 		e.worker = nil
 	}
 	if e.pwshWorker != nil {
-		e.pwshWorker.stop()
+		e.pwshWorker.Stop()
 		e.pwshWorker = nil
 	}
 }
@@ -1017,9 +1025,9 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 			// Bash parse failed. On Windows, try the pwsh worker as the authoritative
 			// PS parser — the command may be valid PowerShell even if bash rejects it.
 			if e.pwshWorker != nil {
-				if psResp, psErr := e.pwshWorker.parse(cmd); psErr == nil && len(psResp.ParseErrors) == 0 {
+				if psResp, psErr := e.pwshWorker.Parse(cmd); psErr == nil && len(psResp.ParseErrors) == 0 {
 					if len(psResp.Commands) > 0 {
-						e.extractFromParsedCommandsDepth(info, psResp.Commands, 0, nil)
+						e.extractFromParsedCommandsDepth(info, convertPSCommands(psResp.Commands), 0, nil)
 					}
 					// Valid PS with zero commands (comment-only, pure assignment, etc.)
 					// is harmless — do not flag as evasive.
@@ -1092,7 +1100,7 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 		// Gated on looksLikePowerShell to avoid unnecessary IPC round-trips and
 		// duplicate path entries for plain bash commands.
 		if e.pwshWorker != nil && looksLikePowerShell(cmd) {
-			psResp, psErr := e.pwshWorker.parse(cmd)
+			psResp, psErr := e.pwshWorker.Parse(cmd)
 			if psErr != nil {
 				// IPC failure means the PS subprocess crashed while parsing this
 				// command. That is suspicious for a PS-looking command — block it
@@ -1100,7 +1108,7 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 				info.Evasive = true
 				info.EvasiveReason = "pwsh worker crashed parsing command: " + psErr.Error()
 			} else if len(psResp.ParseErrors) == 0 && len(psResp.Commands) > 0 {
-				e.extractFromParsedCommandsDepth(info, psResp.Commands, 0, nil)
+				e.extractFromParsedCommandsDepth(info, convertPSCommands(psResp.Commands), 0, nil)
 			}
 			// If psResp.ParseErrors != 0 (len > 0): command is invalid PS but valid bash — allow.
 		}
@@ -1321,9 +1329,9 @@ func (e *Extractor) parsePowerShellInnerCommand(info *ExtractedInfo, innerCmd st
 
 	// Attempt 2: pwsh worker — authoritative PS AST parser (Windows only).
 	if e.pwshWorker != nil {
-		if psResp, psErr := e.pwshWorker.parse(innerCmd); psErr == nil && len(psResp.ParseErrors) == 0 {
+		if psResp, psErr := e.pwshWorker.Parse(innerCmd); psErr == nil && len(psResp.ParseErrors) == 0 {
 			if len(psResp.Commands) > 0 {
-				e.extractFromParsedCommandsDepth(info, psResp.Commands, depth+1, nil)
+				e.extractFromParsedCommandsDepth(info, convertPSCommands(psResp.Commands), depth+1, nil)
 			}
 			// Valid PS with zero commands (comment-only, assignment-only, etc.) is
 			// harmless — return without falling through to the evasive path below.
@@ -1389,6 +1397,23 @@ const (
 	maxShellRecursionDepth = 3
 	goosWindows            = "windows"
 )
+
+// convertPSCommands converts a slice of pwsh.ParsedCommand to []parsedCommand,
+// applying normalizeParsedCmdName to each command name. This is the
+// rules-layer normalization step that was previously done inside the worker.
+func convertPSCommands(pcs []pwsh.ParsedCommand) []parsedCommand {
+	out := make([]parsedCommand, len(pcs))
+	for i, pc := range pcs {
+		out[i] = parsedCommand{
+			Name:         normalizeParsedCmdName(pc.Name),
+			Args:         pc.Args,
+			RedirPaths:   pc.RedirPaths,
+			RedirInPaths: pc.RedirInPaths,
+			HasSubst:     pc.HasSubst,
+		}
+	}
+	return out
+}
 
 func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands []parsedCommand, depth int, parentSymtab map[string]string) {
 	for cmdIdx, pc := range commands {

@@ -5,6 +5,7 @@ package rules
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,45 @@ type psaFinding struct {
 	Message  string `json:"Message"`
 }
 
+// concatBootstrapForLint concatenates the split PowerShell bootstrap files
+// (now in the pwsh/ subpackage) into a single temp file suitable for
+// PSScriptAnalyzer analysis. Returns the path to the temp file; the file is
+// cleaned up via t.Cleanup when the test finishes.
+func concatBootstrapForLint(t *testing.T) string {
+	t.Helper()
+	parts := []string{
+		filepath.Join("pwsh", "ps_bootstrap_header.ps1"),
+		filepath.Join("pwsh", "ps_bootstrap_vars.ps1"),
+		filepath.Join("pwsh", "ps_bootstrap_cmds.ps1"),
+		filepath.Join("pwsh", "ps_bootstrap_dotnet.ps1"),
+		filepath.Join("pwsh", "ps_bootstrap_footer.ps1"),
+	}
+	var sb strings.Builder
+	for _, part := range parts {
+		data, err := os.ReadFile(part)
+		if err != nil {
+			t.Fatalf("concatBootstrapForLint: read %s: %v", part, err)
+		}
+		sb.Write(data)
+	}
+	tmp, err := os.CreateTemp(t.TempDir(), "ps_bootstrap_*.ps1")
+	if err != nil {
+		t.Fatalf("concatBootstrapForLint: create temp file: %v", err)
+	}
+	if _, err := tmp.WriteString(sb.String()); err != nil {
+		tmp.Close()
+		t.Fatalf("concatBootstrapForLint: write temp file: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("concatBootstrapForLint: close temp file: %v", err)
+	}
+	absPath, err := filepath.Abs(tmp.Name())
+	if err != nil {
+		t.Fatalf("concatBootstrapForLint: abs path: %v", err)
+	}
+	return absPath
+}
+
 // TestPSScriptAnalyzer lints ps_bootstrap.ps1 with PSScriptAnalyzer.
 // It is skipped when PSScriptAnalyzer is not installed or pwsh is absent.
 // Run with: go test -run TestPSScriptAnalyzer ./internal/rules/...
@@ -41,13 +81,12 @@ func TestPSScriptAnalyzer(t *testing.T) {
 		t.Skip("PSScriptAnalyzer not installed: run Install-Module PSScriptAnalyzer")
 	}
 
-	// Analyze ps_bootstrap.ps1 directly (Go tests run with the package dir as cwd).
+	// Concatenate the split bootstrap files into a temp file for PSScriptAnalyzer.
+	// The script is split into multiple files in the pwsh/ subpackage; tests run
+	// with the package dir (internal/rules/) as cwd.
 	// Exclude PSUseBOMForUnicodeEncodedFile: the file is embedded and encoded to
 	// base64 UTF-16LE for -EncodedCommand; a UTF-8 BOM is irrelevant here.
-	scriptPath, err := filepath.Abs("ps_bootstrap.ps1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	scriptPath := concatBootstrapForLint(t)
 
 	// PowerShell script: analyze the file and emit JSON.
 	// @() wraps the result so ConvertTo-Json always produces an array.
@@ -124,10 +163,7 @@ func TestPSScriptAnalyzerCodeStyle(t *testing.T) {
 		t.Skip("PSAvoidSemicolonsAsLineTerminators not available in this PSScriptAnalyzer version")
 	}
 
-	scriptPath, err := filepath.Abs("ps_bootstrap.ps1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	scriptPath := concatBootstrapForLint(t)
 
 	const styleRules = "PSAvoidSemicolonsAsLineTerminators,PSAvoidUsingDoubleQuotesForConstantString"
 	psScript := `

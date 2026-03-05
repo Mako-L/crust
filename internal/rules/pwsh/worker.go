@@ -1,4 +1,4 @@
-package rules
+package pwsh
 
 import (
 	"bufio"
@@ -14,36 +14,53 @@ import (
 	"unicode/utf16"
 )
 
-// psBootstrapScript is the PowerShell bootstrap script for the pwsh worker
-// process. It lives in ps_bootstrap.ps1 and is embedded at compile time.
-// The script runs in a loop reading JSON requests from stdin and writing JSON
-// responses to stdout; it uses the native PS AST API for accurate parsing.
-//
-//go:embed ps_bootstrap.ps1
-var psBootstrapScript string
+//go:embed ps_bootstrap_header.ps1
+var psHeader string
+
+//go:embed ps_bootstrap_vars.ps1
+var psVars string
+
+//go:embed ps_bootstrap_cmds.ps1
+var psCmds string
+
+//go:embed ps_bootstrap_dotnet.ps1
+var psDotNet string
+
+//go:embed ps_bootstrap_footer.ps1
+var psFooter string
+
+var psBootstrapScript = psHeader + psVars + psCmds + psDotNet + psFooter
 
 // pwshWorkerRequest is the IPC request sent from Go → pwsh worker.
 type pwshWorkerRequest struct {
 	Command string `json:"command"`
 }
 
-// pwshWorkerResponse is the IPC response received from pwsh worker → Go.
-// Commands uses []parsedCommand so results plug directly into
-// extractFromParsedCommandsDepth without conversion.
-type pwshWorkerResponse struct {
-	Commands    []parsedCommand `json:"commands"`
+// ParsedCommand represents a single command extracted from the PowerShell AST.
+// Field names and JSON tags match the PSCustomObject emitted by the bootstrap script.
+type ParsedCommand struct {
+	Name         string   `json:"name"`
+	Args         []string `json:"args"`
+	RedirPaths   []string `json:"redir_paths"`
+	RedirInPaths []string `json:"redir_in_paths"`
+	HasSubst     bool     `json:"has_subst"`
+}
+
+// Response is the IPC response received from the pwsh worker subprocess.
+type Response struct {
+	Commands    []ParsedCommand `json:"commands"`
 	ParseErrors []string        `json:"parseErrors"`
 }
 
-// pwshWorker manages a persistent pwsh subprocess for accurate PowerShell
+// Worker manages a persistent pwsh subprocess for accurate PowerShell
 // command analysis. It mirrors the shellWorker pattern: JSON over stdin/stdout,
 // auto-restart on crash, mutex-serialized access.
-type pwshWorker struct {
+type Worker struct {
 	mu       sync.Mutex
 	proc     *exec.Cmd
 	stdin    io.WriteCloser
 	scanner  *bufio.Scanner
-	encoder  *json.Encoder // reused across parse() calls to avoid per-call allocation
+	encoder  *json.Encoder // reused across Parse() calls to avoid per-call allocation
 	pwshPath string        // path to pwsh.exe or powershell.exe
 	encoded  string        // base64 UTF-16LE encoded bootstrap script
 }
@@ -61,9 +78,9 @@ func FindPwsh() (string, bool) {
 	return "", false
 }
 
-// newPwshWorker creates and starts a pwsh worker subprocess.
-func newPwshWorker(pwshPath string) (*pwshWorker, error) {
-	w := &pwshWorker{
+// NewWorker creates and starts a pwsh worker subprocess.
+func NewWorker(pwshPath string) (*Worker, error) {
+	w := &Worker{
 		pwshPath: pwshPath,
 		encoded:  encodePSCommand(psBootstrapScript),
 	}
@@ -73,7 +90,7 @@ func newPwshWorker(pwshPath string) (*pwshWorker, error) {
 	return w, nil
 }
 
-func (w *pwshWorker) start() error {
+func (w *Worker) start() error {
 	proc := exec.CommandContext(context.Background(), w.pwshPath, //nolint:gosec // pwshPath comes from exec.LookPath, not user input
 		"-NoProfile", "-NonInteractive", "-EncodedCommand", w.encoded)
 	stdin, err := proc.StdinPipe()
@@ -100,43 +117,39 @@ func (w *pwshWorker) start() error {
 	return nil
 }
 
-// parse sends a command to the pwsh worker and returns the parsed result.
+// Parse sends a command to the pwsh worker and returns the parsed result.
 // Returns an error if the worker died or the response was malformed; the
 // worker is automatically restarted on the next call.
-func (w *pwshWorker) parse(cmd string) (pwshWorkerResponse, error) {
+func (w *Worker) Parse(cmd string) (Response, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if w.proc == nil {
 		if err := w.start(); err != nil {
-			return pwshWorkerResponse{}, err
+			return Response{}, err
 		}
 	}
 
 	if err := w.encoder.Encode(pwshWorkerRequest{Command: cmd}); err != nil {
 		w.kill()
-		return pwshWorkerResponse{}, err
+		return Response{}, err
 	}
 
 	if !w.scanner.Scan() {
 		w.kill()
-		return pwshWorkerResponse{}, errors.New("pwsh worker: unexpected EOF")
+		return Response{}, errors.New("pwsh worker: unexpected EOF")
 	}
 
-	var resp pwshWorkerResponse
+	var resp Response
 	if err := json.Unmarshal(w.scanner.Bytes(), &resp); err != nil {
 		w.kill()
-		return pwshWorkerResponse{}, err
-	}
-
-	for i := range resp.Commands {
-		resp.Commands[i].Name = normalizeParsedCmdName(resp.Commands[i].Name)
+		return Response{}, err
 	}
 
 	return resp, nil
 }
 
-func (w *pwshWorker) kill() {
+func (w *Worker) kill() {
 	if w.stdin != nil {
 		w.stdin.Close() // close write end before Kill to avoid fd leak
 	}
@@ -151,7 +164,8 @@ func (w *pwshWorker) kill() {
 	w.scanner = nil
 }
 
-func (w *pwshWorker) stop() {
+// Stop shuts down the pwsh worker subprocess.
+func (w *Worker) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.kill() // kill() closes stdin before sending SIGKILL

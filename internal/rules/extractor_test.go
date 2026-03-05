@@ -3962,7 +3962,7 @@ func TestCommandDB_PSCmdletCaseInsensitive(t *testing.T) {
 			t.Logf("Operation=%v Evasive=%v Paths=%v", info.Operation, info.Evasive, info.Paths)
 			if info.Operation != tt.wantOp {
 				// BUG: case-sensitive commandDB lookup misses non-canonical PS cmdlet casing.
-				// The test is written with the desired behaviour (OpRead); a failure here
+				// The test is written with the desired behavior (OpRead); a failure here
 				// means the bug is present.
 				t.Errorf("Operation = %v, want %v\n  desc: %s", info.Operation, tt.wantOp, tt.desc)
 			}

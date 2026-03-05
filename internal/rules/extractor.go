@@ -182,8 +182,8 @@ func FindPwsh() (string, bool) {
 type Extractor struct {
 	commandDB  map[string]CommandInfo
 	env        map[string]string // process environment for shell expansion
-	worker     *shellWorker  // nil if subprocess isolation is disabled
-	pwshWorker *pwsh.Worker // nil on non-Windows or if pwsh not found
+	worker     *shellWorker      // nil if subprocess isolation is disabled
+	pwshWorker *pwsh.Worker      // nil on non-Windows or if pwsh not found
 }
 
 // EnableSubprocessIsolation starts a worker subprocess for crash-isolated
@@ -862,11 +862,11 @@ func defaultCommandDB() map[string]CommandInfo {
 		"system.reflection.assembly::loadfrom": {Operation: OpExecute, PathArgIndex: []int{0}},
 		"system.reflection.assembly::load":     {Operation: OpExecute, PathArgIndex: []int{0}},
 		// Instance methods via New-Object (keys lowercased, :: separator)
-		"system.net.webclient::downloadfile":    {Operation: OpWrite, PathArgIndex: []int{1}},
-		"system.net.webclient::downloadstring":  {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"system.net.webclient::uploadfile":      {Operation: OpRead, PathArgIndex: []int{1}},
-		"system.net.webclient::uploadstring":    {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"system.net.webclient::openread":        {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"system.net.webclient::downloadfile":   {Operation: OpWrite, PathArgIndex: []int{1}},
+		"system.net.webclient::downloadstring": {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"system.net.webclient::uploadfile":     {Operation: OpRead, PathArgIndex: []int{1}},
+		"system.net.webclient::uploadstring":   {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"system.net.webclient::openread":       {Operation: OpNetwork, PathArgIndex: []int{0}},
 		// System.Net.WebClient — additional methods
 		"system.net.webclient::uploaddata":   {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"system.net.webclient::downloaddata": {Operation: OpNetwork, PathArgIndex: []int{0}},

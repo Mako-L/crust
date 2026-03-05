@@ -29,3 +29,6 @@ tests/agents/config.local.yaml
 
 # Claude settings
 .claude/settings.local.json
+
+# Fuzz test corpus (generated locally; not for VCS)
+**/testdata/fuzz/

@@ -138,11 +138,15 @@ func RunShellWorkerMain() bool {
 	for scanner.Scan() {
 		var req shellWorkerRequest
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			encoder.Encode(shellWorkerResponse{Panicked: true}) //nolint:errcheck
+			if err := encoder.Encode(shellWorkerResponse{Panicked: true}); err != nil {
+				return true // pipe broken; parent will restart
+			}
 			continue
 		}
 		resp := evalShellCommand(req)
-		encoder.Encode(resp) //nolint:errcheck
+		if err := encoder.Encode(resp); err != nil {
+			return true // pipe broken; parent will restart
+		}
 	}
 
 	return true

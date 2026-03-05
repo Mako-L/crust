@@ -53,9 +53,9 @@ func normalizeParsedCmdName(name string) string {
 	if name == "[" {
 		return "test"
 	}
-	// .NET static calls arrive as "System.IO.File::ReadAllText" — normalize to
-	// lowercase so commandDB lookups are case-insensitive for .NET names.
-	if strings.Contains(name, "::") {
+	// .NET static calls and PS cmdlets: lowercase for case-insensitive DB lookup.
+	// PS is case-insensitive by design; bash commands are already lowercase.
+	if strings.Contains(name, "::") || strings.Contains(name, "-") {
 		return strings.ToLower(name)
 	}
 	return name
@@ -262,7 +262,7 @@ func NewExtractorWithEnv(env map[string]string) *Extractor {
 
 // defaultCommandDB returns the default command database
 func defaultCommandDB() map[string]CommandInfo {
-	return map[string]CommandInfo{
+	db := map[string]CommandInfo{
 		// ===========================================
 		// READ OPERATIONS
 		// ===========================================
@@ -888,6 +888,17 @@ func defaultCommandDB() map[string]CommandInfo {
 		"system.net.http.httpclient::getasync":       {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"system.net.http.httpclient::postasync":      {Operation: OpNetwork, PathArgIndex: []int{0}},
 	}
+	// Lowercase all PS cmdlet keys (Verb-Noun → verb-noun) for case-insensitive lookup.
+	// Bash commands are already lowercase; .NET API keys are already lowercase.
+	lc := make(map[string]CommandInfo, len(db))
+	for k, v := range db {
+		if strings.Contains(k, "-") {
+			lc[strings.ToLower(k)] = v
+		} else {
+			lc[k] = v
+		}
+	}
+	return lc
 }
 
 // Extract extracts info from a tool call
@@ -1321,17 +1332,7 @@ func (e *Extractor) inferPowerShellOperation(info *ExtractedInfo, cmd string) {
 			continue
 		}
 		cmdName := stripPathPrefix(fields[0])
-		lookupName := cmdName
-		if strings.Contains(cmdName, "-") {
-			parts := strings.SplitN(cmdName, "-", 2)
-			if len(parts) == 2 && len(parts[0]) > 0 && len(parts[1]) > 0 {
-				titled := strings.ToUpper(parts[0][:1]) + strings.ToLower(parts[0][1:]) + "-" +
-					strings.ToUpper(parts[1][:1]) + strings.ToLower(parts[1][1:])
-				if _, ok := e.commandDB[titled]; ok {
-					lookupName = titled
-				}
-			}
-		}
+		lookupName := strings.ToLower(cmdName)
 		if ci, ok := e.commandDB[lookupName]; ok {
 			if operationPriority(ci.Operation) > operationPriority(info.Operation) {
 				info.Operation = ci.Operation
@@ -1461,20 +1462,10 @@ func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands
 		// Resolve the actual command name and args, skipping wrappers like sudo/env
 		cmdName, args := e.resolveCommand(pc.Name, pc.Args)
 
-		// Normalize PS cmdlet case for commandDB lookup (PS is case-insensitive).
+		// lookupName is lowercased for case-insensitive commandDB lookup.
 		// cmdName retains its original case for shellInterpreters, powershellInterpreters,
-		// glob detection, etc. lookupName is used only for commandDB lookups.
-		lookupName := cmdName
-		if strings.Contains(cmdName, "-") {
-			parts := strings.SplitN(cmdName, "-", 2)
-			if len(parts) == 2 && len(parts[0]) > 0 && len(parts[1]) > 0 {
-				titled := strings.ToUpper(parts[0][:1]) + strings.ToLower(parts[0][1:]) + "-" +
-					strings.ToUpper(parts[1][:1]) + strings.ToLower(parts[1][1:])
-				if _, ok := e.commandDB[titled]; ok {
-					lookupName = titled
-				}
-			}
-		}
+		// glob detection, etc.
+		lookupName := strings.ToLower(cmdName)
 
 		// SECURITY: Glob patterns in command name position (e.g., /???/??t, ca?)
 		// bypass command DB lookup since the glob doesn't match literal entries.

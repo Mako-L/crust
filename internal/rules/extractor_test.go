@@ -4072,6 +4072,9 @@ func TestPSCmdletAlias_Lookup(t *testing.T) {
 // bash parser sees as a plain command name; normalizeParsedCmdName lowercases
 // the "::" form so the commandDB lookup succeeds cross-platform.
 func TestCommandDB_DotNetAPIs(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping: [Type]::Method() syntax is not valid bash on non-Windows; use TestPSWorker_* for Windows-only pwsh worker tests")
+	}
 	ext := NewExtractor()
 
 	tests := []struct {

@@ -1494,8 +1494,7 @@ const (
 )
 
 // convertPSCommands converts a slice of pwsh.ParsedCommand to []parsedCommand,
-// applying normalizeParsedCmdName to each command name. This is the
-// rules-layer normalization step that was previously done inside the worker.
+// applying normalizeParsedCmdName to each command name.
 func convertPSCommands(pcs []pwsh.ParsedCommand) []parsedCommand {
 	out := make([]parsedCommand, len(pcs))
 	for i, pc := range pcs {

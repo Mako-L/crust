@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/tui"
 	"github.com/BakeLens/crust/internal/tui/banner"
 )
@@ -181,7 +182,7 @@ func runStartupForm(defaultEndpoint string, defaultProxyPort int) (Config, error
 				}),
 			huh.NewConfirm().
 				Title("Disable builtin rules?").
-				Description("Only use user-defined rules (16 locked rules remain active)").
+				Description(fmt.Sprintf("Only use user-defined rules (%d locked rules remain active)", rules.CountLockedBuiltinRules())).
 				Value(&disableBuiltin),
 			huh.NewInput().
 				Title("Proxy port").

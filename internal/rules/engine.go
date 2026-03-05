@@ -810,6 +810,24 @@ func (e *Engine) LockedRuleCount() int {
 	return count
 }
 
+// CountLockedBuiltinRules returns the total number of locked builtin rules
+// (YAML + dynamic) without requiring a full Engine instance.
+func CountLockedBuiltinRules() int {
+	loader := NewLoader("")
+	yamlRules, err := loader.LoadBuiltin()
+	if err != nil {
+		return 0
+	}
+	dynamic := generateProtectionRules(EngineConfig{UserRulesDir: DefaultUserRulesDir()})
+	count := len(dynamic) // all dynamic rules are locked
+	for _, r := range yamlRules {
+		if r.IsLocked() {
+			count++
+		}
+	}
+	return count
+}
+
 // GetLoader returns the rule loader
 func (e *Engine) GetLoader() *Loader {
 	return e.loader

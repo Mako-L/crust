@@ -3400,6 +3400,91 @@ func TestPowerShellGap_WindowsPathFormats(t *testing.T) {
 	}
 }
 
+// TestPowerShellAbsolutePathCmdlet verifies that PS cmdlets invoked via their
+// absolute filesystem path (e.g. C:\Windows\...\Get-Content.ps1) are still
+// recognized by inferPowerShellOperation after stripPathPrefix strips the
+// directory component.
+func TestPowerShellAbsolutePathCmdlet(t *testing.T) {
+	extractor := NewExtractorWithEnv(nil)
+
+	tests := []struct {
+		name    string
+		command string
+		wantOp  Operation
+	}{
+		{
+			name:    "absolute-path-Get-Content",
+			command: `C:/Windows/System32/WindowsPowerShell/v1.0/Get-Content /home/user/.env`,
+			wantOp:  OpRead,
+		},
+		{
+			name:    "absolute-path-Remove-Item",
+			command: `C:/Windows/System32/WindowsPowerShell/v1.0/Remove-Item /home/user/.env`,
+			wantOp:  OpDelete,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v", info.Operation, tt.wantOp)
+			}
+		})
+	}
+}
+
+// TestPowerShellRedirectPaths verifies that redirect paths in PS commands
+// (e.g. Get-Content .env > stolen.txt) are extracted by the pwsh worker.
+// The redirect destination is a write path; combining with a read-arg means
+// the dominant operation is write (higher severity). Both paths must appear
+// in Paths so they can be matched against security rules.
+func TestPowerShellRedirectPaths(t *testing.T) {
+	if runtime.GOOS != goosWindows {
+		t.Skip("pwsh worker redirect extraction requires Windows")
+	}
+	extractor := NewExtractor()
+
+	tests := []struct {
+		name      string
+		command   string
+		wantPaths []string // all paths that must appear in info.Paths
+		wantOp    Operation
+	}{
+		{
+			// Get-Content reads .env, output redirected to stolen.txt.
+			// Redirect-out is a write, which has higher severity than read.
+			name:      "Get-Content redirect out",
+			command:   "Get-Content /home/user/.env > /tmp/stolen.txt",
+			wantPaths: []string{"/home/user/.env", "/tmp/stolen.txt"},
+			wantOp:    OpWrite,
+		},
+		{
+			// Set-Content writes to out.txt with input redirected from .env.
+			name:      "Set-Content redirect in",
+			command:   "Set-Content /tmp/out.txt < /home/user/.env",
+			wantPaths: []string{"/home/user/.env"},
+			wantOp:    OpWrite,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v", info.Operation, tt.wantOp)
+			}
+			for _, p := range tt.wantPaths {
+				if !slices.Contains(info.Paths, p) {
+					t.Errorf("expected path %q in %v", p, info.Paths)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodePowerShellEncodedCommand(t *testing.T) {
 	tests := []struct {
 		name   string

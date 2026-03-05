@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/tui"
 )
 
@@ -177,7 +178,7 @@ func runStartupReader(defaultEndpoint string, defaultProxyPort int) (Config, err
 			}
 		}
 
-		fmt.Printf("  %s Disable builtin rules? (16 locked rules remain active) [y/N]: ", prompt)
+		fmt.Printf("  %s Disable builtin rules? (%d locked rules remain active) [y/N]: ", prompt, rules.CountLockedBuiltinRules())
 		rulesAnswer, _ := reader.ReadString('\n')
 		rulesAnswer = strings.TrimSpace(strings.ToLower(rulesAnswer))
 		config.DisableBuiltinRules = rulesAnswer == "y" || rulesAnswer == "yes"

@@ -325,7 +325,6 @@ func (l *Linter) lintCompilation(rule Rule) []LintIssue {
 }
 
 // LintFile loads and lints rules from a YAML file.
-// Supports both progressive disclosure format (RuleSetConfig) and legacy format (RuleSet).
 func (l *Linter) LintFile(path string) (LintResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

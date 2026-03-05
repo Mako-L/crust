@@ -144,7 +144,7 @@ Write-Output $out
 // silently expand $variables; making interpolation intent explicit prevents
 // accidental expansion in future edits.
 //
-// Skipped when PSScriptAnalyzer is absent or the rules don't exist (< v1.22).
+// Skipped when PSScriptAnalyzer is absent or the required rules are not available.
 func TestPSScriptAnalyzerCodeStyle(t *testing.T) {
 	pwshPath, ok := FindPwsh()
 	if !ok {

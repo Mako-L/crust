@@ -687,10 +687,6 @@ func FuzzForkBombDetection(f *testing.F) {
 	})
 }
 
-// FuzzSanitizeCommand was removed — SanitizeCommand has been replaced by
-// syntax.Printer+Minify for canonical command reconstruction. The full pipeline
-// is already fuzzed by FuzzEngineBypass and FuzzParseShellCommands.
-
 // =============================================================================
 // FuzzCommandRegexBypass: End-to-end test for command-regex rule bypass.
 // Tests rules with match.command patterns (evaluateMatch at 62.5%).

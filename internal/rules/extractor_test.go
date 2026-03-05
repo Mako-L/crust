@@ -1950,10 +1950,6 @@ func TestExtract_SymbolicExecution(t *testing.T) {
 	}
 }
 
-// TestMapEnviron was removed — mapEnviron and preserveVar have been replaced
-// by interp.Runner with process-env seeding. Variable resolution is now handled
-// natively by the Runner, making the custom expand.Environ unnecessary.
-
 func TestParseShellCommandsExpand(t *testing.T) {
 	tests := []struct {
 		name       string

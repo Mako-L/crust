@@ -94,7 +94,7 @@ extractBashCommand (Windows path)
  └─ 3. Results merged: paths/hosts union, highest-severity operation wins
 ```
 
-**pwsh worker** (`pwshworker.go`): a persistent `pwsh.exe` (PS 7+, preferred) or `powershell.exe` (5.1, always present on Windows 10/11) subprocess. The bootstrap script uses `[System.Management.Automation.Language.Parser]::ParseInput()` — a pure AST parser, never executes commands. JSON over stdin/stdout; auto-restarts on crash.
+**pwsh worker** (`pwsh/worker.go`): a persistent `pwsh.exe` (PS 7+, preferred) or `powershell.exe` (5.1, always present on Windows 10/11) subprocess. The bootstrap script uses `[System.Management.Automation.Language.Parser]::ParseInput()` — a pure AST parser, never executes commands. JSON over stdin/stdout; auto-restarts on crash.
 
 **Fallback** (no pwsh worker): heuristic `substitutePSVariables` + `normalizePSBackslashPaths` pre-processing before bash parsing, gated behind `runtime.GOOS == "windows"`.
 

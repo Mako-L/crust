@@ -3,6 +3,7 @@ package rules
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -13,198 +14,13 @@ import (
 	"unicode/utf16"
 )
 
-// psBootstrapScript is the PowerShell script embedded in the pwsh worker process.
-// It runs in a loop, reading JSON requests from stdin and writing JSON responses
-// to stdout. Each request contains a PS command string; each response contains
-// the parsed commands (name + args) and any parse errors.
+// psBootstrapScript is the PowerShell bootstrap script for the pwsh worker
+// process. It lives in ps_bootstrap.ps1 and is embedded at compile time.
+// The script runs in a loop reading JSON requests from stdin and writing JSON
+// responses to stdout; it uses the native PS AST API for accurate parsing.
 //
-// The script uses the native PS AST API for accurate parsing:
-//   - [System.Management.Automation.Language.Parser]::ParseInput() — real PS parser
-//   - AssignmentStatementAst tracking — resolves simple $var = "value" assignments
-//   - CommandAst extraction — yields command names and their string arguments
-//
-// Supported platforms: Windows 10/11 (powershell.exe 5.1 always present;
-// pwsh.exe 7+ used when available).
-const psBootstrapScript = `
-using namespace System.Management.Automation.Language
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
-# 'Stop' ensures all errors propagate to the outer catch block, which always
-# writes a JSON response — preventing scanner.Scan() from blocking indefinitely
-# on the Go side if a runtime error occurs without producing output.
-$ErrorActionPreference = 'Stop'
-
-while ($true) {
-    $ln = [Console]::In.ReadLine()
-    if ($null -eq $ln) { break }
-    try {
-        $req  = $ln | ConvertFrom-Json
-        $errs = [ParseError[]]@()
-        $toks = [Token[]]@()
-        $ast  = [Parser]::ParseInput($req.command, [ref]$toks, [ref]$errs)
-
-        # Walk top-level statements in source order via $block.Statements.
-        # For each statement: record any direct $var = "literal" assignment
-        # FIRST, then extract all CommandAst nodes from that statement.
-        #
-        # This is the correct scoping approach:
-        #   $p = "secret"; Get-Content $p   → $p resolved (assignment precedes use)
-        #   ForEach-Object { $p = "x" }; Get-Content $p → $p NOT resolved
-        #     (inner-scope assignments never pollute the top-level $vars table)
-        #
-        # FindAll($pred, $false) on a ScriptBlockAst root skips its own children
-        # due to PS visitor behavior, so we avoid it for assignment collection and
-        # instead walk $block.Statements directly.
-        $vars = @{}
-        $cmds = [System.Collections.Generic.List[object]]::new()
-        foreach ($block in @($ast.BeginBlock, $ast.ProcessBlock, $ast.EndBlock)) {
-            if ($null -eq $block) { continue }
-            foreach ($stmt in $block.Statements) {
-                # Record direct-scope $var = "literal" before processing this statement's commands.
-                # AssignmentStatementAst.Right is a CommandExpressionAst (not PipelineAst);
-                # navigate Right.Expression to reach the StringConstantExpressionAst value.
-                if ($stmt -is [AssignmentStatementAst]) {
-                    try {
-                        $lhs = $stmt.Left
-                        $rhs = $stmt.Right
-                        if ($rhs -is [CommandExpressionAst] -and
-                            $rhs.Expression -is [StringConstantExpressionAst]) {
-                            # Plain assignment: $var = "literal"
-                            if ($lhs -is [VariableExpressionAst]) {
-                                $vars[$lhs.VariablePath.UserPath] = $rhs.Expression.Value
-                            }
-                            # Type-cast assignment: [type]$var = "literal"
-                            # The LHS is a ConvertExpressionAst wrapping a VariableExpressionAst.
-                            elseif ($lhs -is [ConvertExpressionAst] -and
-                                    $lhs.Child -is [VariableExpressionAst]) {
-                                $vars[$lhs.Child.VariablePath.UserPath] = $rhs.Expression.Value
-                            }
-                        }
-                    } catch { $null = $_ }
-                }
-                # Extract all CommandAst nodes from this statement, recursing into
-                # nested scriptblocks (pipelines, foreach bodies, etc.).
-                # Called on $stmt (a StatementAst), not the root ScriptBlockAst,
-                # so FindAll with $true works correctly.
-                $stmt.FindAll({ param($n) $n -is [CommandAst] }, $true) | ForEach-Object {
-                    $nm = $_.GetCommandName()
-                    if ($nm) {  # filters both $null and "" (e.g. & "" arg)
-                        $ag = [System.Collections.Generic.List[string]]::new()
-                        $_.CommandElements | Select-Object -Skip 1 | ForEach-Object {
-                            try {
-                                if ($_ -is [StringConstantExpressionAst]) {
-                                    $ag.Add($_.Value)
-                                } elseif ($_ -is [VariableExpressionAst]) {
-                                    $k = $_.VariablePath.UserPath
-                                    if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                } elseif ($_ -is [ExpandableStringExpressionAst]) {
-                                    # "$var" expandable string: resolve if single bare variable.
-                                    $nested = @($_.NestedExpressions)
-                                    if ($nested.Count -eq 1 -and $nested[0] -is [VariableExpressionAst]) {
-                                        $k = $nested[0].VariablePath.UserPath
-                                        if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                    }
-                                } elseif ($_ -is [ArrayExpressionAst] -or $_ -is [ArrayLiteralAst]) {
-                                    # @("a", "b") or "a", "b" — extract literal string elements only.
-                                    # searchNestedScriptBlocks=$false: don't descend into $(cmd).
-                                    $_.FindAll({ param($n) $n -is [StringConstantExpressionAst] }, $false) |
-                                        ForEach-Object { $ag.Add($_.Value) }
-                                } elseif ($_ -is [CommandParameterAst]) {
-                                    $ag.Add('-' + $_.ParameterName)
-                                    # -Flag:value colon syntax: Argument holds the value expression.
-                                    if ($null -ne $_.Argument) {
-                                        if ($_.Argument -is [StringConstantExpressionAst]) {
-                                            $ag.Add($_.Argument.Value)
-                                        } elseif ($_.Argument -is [VariableExpressionAst]) {
-                                            $k = $_.Argument.VariablePath.UserPath
-                                            if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                        } elseif ($_.Argument -is [ExpandableStringExpressionAst]) {
-                                            $nested = @($_.Argument.NestedExpressions)
-                                            if ($nested.Count -eq 1 -and $nested[0] -is [VariableExpressionAst]) {
-                                                $k = $nested[0].VariablePath.UserPath
-                                                if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                            }
-                                        } elseif ($_.Argument -is [ArrayExpressionAst] -or
-                                                  $_.Argument -is [ArrayLiteralAst]) {
-                                            $_.Argument.FindAll({ param($n) $n -is [StringConstantExpressionAst] }, $false) |
-                                                ForEach-Object { $ag.Add($_.Value) }
-                                        }
-                                    }
-                                }
-                            } catch { $null = $_ }
-                        }
-                        # Extract output/input redirect paths from this CommandAst.
-                        # RedirectionAst.File is a CommandElementAst; we only capture
-                        # StringConstantExpressionAst (literal paths) for safety.
-                        $redirOut = [System.Collections.Generic.List[string]]::new()
-                        $redirIn  = [System.Collections.Generic.List[string]]::new()
-                        foreach ($r in $_.Redirections) {
-                            try {
-                                $f = $r.File
-                                if ($f -is [StringConstantExpressionAst]) {
-                                    # FromStream Input = stdin (<); others = stdout/stderr (>, >>)
-                                    if ($r.FromStream -eq [RedirectionStream]::Input) {
-                                        $redirIn.Add($f.Value)
-                                    } else {
-                                        $redirOut.Add($f.Value)
-                                    }
-                                }
-                            } catch { $null = $_ }
-                        }
-                        # has_subst: true if any *argument* element is not a simple constant
-                        # (variable, subexpression, expandable string, array, etc.).
-                        # Skip index 0 (the command name itself) — & $cmd -Arg should not
-                        # set has_subst=true just because the name element is a variable.
-                        # Use foreach+break for early exit; ForEach-Object pipelines do not
-                        # support break (it would exit the outer foreach ($stmt) loop instead).
-                        $hasSubst = $false
-                        foreach ($el in ($_.CommandElements | Select-Object -Skip 1)) {
-                            if ($el -isnot [StringConstantExpressionAst] -and
-                                $el -isnot [CommandParameterAst]) {
-                                $hasSubst = $true
-                                break
-                            }
-                            # -Flag:$var or -Flag:"$expandable" — the colon-syntax Argument is complex.
-                            if ($el -is [CommandParameterAst] -and
-                                $null -ne $el.Argument -and
-                                $el.Argument -isnot [StringConstantExpressionAst]) {
-                                $hasSubst = $true
-                                break
-                            }
-                        }
-                        $cmds.Add([PSCustomObject]@{
-                            name           = $nm
-                            args           = [string[]]$ag.ToArray()
-                            redir_paths    = [string[]]$redirOut.ToArray()
-                            redir_in_paths = [string[]]$redirIn.ToArray()
-                            has_subst      = $hasSubst
-                        })
-                    }
-                }
-            }
-        }
-
-        $resp = [PSCustomObject]@{
-            commands    = [object[]]$cmds.ToArray()
-            parseErrors = [string[]]@($errs | ForEach-Object { $_.Message })
-        }
-        # Strip all newlines: ConvertTo-Json -Compress is not guaranteed to
-        # produce a single line in Windows PowerShell 5.1 with nested objects.
-        # The Go side uses bufio.Scanner which reads one line at a time, so
-        # the response MUST be exactly one line.
-        # Use -replace with single-quoted regex (no PS backtick escapes needed,
-        # which would conflict with Go raw string literal delimiters).
-        ($resp | ConvertTo-Json -Compress -Depth 5) -replace '\r\n|\r|\n', ''
-        [Console]::Out.Flush()
-    } catch {
-        ([PSCustomObject]@{
-            commands    = [object[]]@()
-            parseErrors = [string[]]@($_.Exception.Message)
-        } | ConvertTo-Json -Compress) -replace '\r\n|\r|\n', ''
-        [Console]::Out.Flush()
-    }
-}
-`
+//go:embed ps_bootstrap.ps1
+var psBootstrapScript string
 
 // pwshWorkerRequest is the IPC request sent from Go → pwsh worker.
 type pwshWorkerRequest struct {

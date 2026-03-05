@@ -1,3 +1,5 @@
+fail_fast: true
+
 repos:
   # Go formatting (runs first, auto-fixes files)
   - repo: local
@@ -84,6 +86,7 @@ repos:
         language: system
         pass_filenames: false
         files: (go\.mod|go\.sum|\.go)$
+        stages: [pre-push]
 
   # Semgrep SAST scan
   - repo: local

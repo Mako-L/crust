@@ -5,7 +5,6 @@ package rules
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -26,7 +25,7 @@ type psaFinding struct {
 	Message  string `json:"Message"`
 }
 
-// TestPSScriptAnalyzer lints psBootstrapScript with PSScriptAnalyzer.
+// TestPSScriptAnalyzer lints ps_bootstrap.ps1 with PSScriptAnalyzer.
 // It is skipped when PSScriptAnalyzer is not installed or pwsh is absent.
 // Run with: go test -run TestPSScriptAnalyzer ./internal/rules/...
 func TestPSScriptAnalyzer(t *testing.T) {
@@ -42,20 +41,19 @@ func TestPSScriptAnalyzer(t *testing.T) {
 		t.Skip("PSScriptAnalyzer not installed: run Install-Module PSScriptAnalyzer")
 	}
 
-	// Write the bootstrap script to a temp .ps1 file so PSScriptAnalyzer can
-	// analyze it by path (avoids all -ScriptDefinition quoting issues).
-	// Prepend UTF-8 BOM: PSUseBOMForUnicodeEncodedFile fires on BOM-less UTF-8 files.
-	tmpPath := filepath.Join(t.TempDir(), "crust-psa.ps1")
-	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(psBootstrapScript)...)
-	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+	// Analyze ps_bootstrap.ps1 directly (Go tests run with the package dir as cwd).
+	// Exclude PSUseBOMForUnicodeEncodedFile: the file is embedded and encoded to
+	// base64 UTF-16LE for -EncodedCommand; a UTF-8 BOM is irrelevant here.
+	scriptPath, err := filepath.Abs("ps_bootstrap.ps1")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// PowerShell script: analyze the temp file and emit JSON.
+	// PowerShell script: analyze the file and emit JSON.
 	// @() wraps the result so ConvertTo-Json always produces an array.
 	psScript := `
 Import-Module PSScriptAnalyzer
-$results = Invoke-ScriptAnalyzer -Path '` + tmpPath + `' -IncludeDefaultRules
+$results = Invoke-ScriptAnalyzer -Path '` + scriptPath + `' -IncludeDefaultRules -ExcludeRule PSUseBOMForUnicodeEncodedFile
 $out = @($results | Select-Object RuleName,
     @{N='Severity';E={$_.Severity.ToString()}},
     Line, Column, Message) | ConvertTo-Json -Compress -Depth 2
@@ -93,12 +91,12 @@ Write-Output $out
 			f.Severity, f.RuleName, f.Line, f.Column, f.Message)
 	}
 	if len(findings) == 0 {
-		t.Logf("PSScriptAnalyzer: no findings (all 70 default rules passed)")
+		t.Logf("PSScriptAnalyzer: no findings (all default rules passed)")
 	}
 }
 
 // TestPSScriptAnalyzerCodeStyle runs PSScriptAnalyzer with non-default style
-// rules that complement the 70 default rules in TestPSScriptAnalyzer.
+// rules that complement the default rules in TestPSScriptAnalyzer.
 //
 // PSAvoidSemicolonsAsLineTerminators: semicolons as statement separators harm
 // readability and are a common obfuscation technique in shell scripts.
@@ -126,16 +124,15 @@ func TestPSScriptAnalyzerCodeStyle(t *testing.T) {
 		t.Skip("PSAvoidSemicolonsAsLineTerminators not available in this PSScriptAnalyzer version")
 	}
 
-	tmpPath := filepath.Join(t.TempDir(), "crust-psa-style.ps1")
-	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(psBootstrapScript)...)
-	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+	scriptPath, err := filepath.Abs("ps_bootstrap.ps1")
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	const styleRules = "PSAvoidSemicolonsAsLineTerminators,PSAvoidUsingDoubleQuotesForConstantString"
 	psScript := `
 Import-Module PSScriptAnalyzer
-$results = Invoke-ScriptAnalyzer -Path '` + tmpPath + `' -RuleName ` + styleRules + `
+$results = Invoke-ScriptAnalyzer -Path '` + scriptPath + `' -RuleName ` + styleRules + `
 $out = @($results | Select-Object RuleName,
     @{N='Severity';E={$_.Severity.ToString()}},
     Line, Column, Message) | ConvertTo-Json -Compress -Depth 2
@@ -620,6 +617,598 @@ func TestPSWorker_ScopePrefixVar(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("expected Get-Content with arg %q in %+v", tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Security gap tests — document known bypass behaviors
+//
+// These tests verify the *current* behavior of the pwsh worker and extractor
+// for command patterns that partially or fully evade analysis. They serve as
+// regression tests: if a gap is later fixed, the test expectation should be
+// updated to match the improved detection.
+//
+// Legend:
+//   [GAP-SILENT]  — no operation, no path, no evasive flag set
+//   [GAP-PARTIAL] — correct operation type but path not extracted
+//   [DETECTED]    — correctly detected with path and operation
+// =============================================================================
+
+// TestPSWorker_DotNetMethodCall verifies that .NET static method calls
+// ([Type]::Method(args)) are detected via InvokeMemberExpressionAst walking.
+// Previously a [GAP-SILENT] bypass; now [DETECTED].
+func TestPSWorker_DotNetMethodCall(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		cmd      string
+		wantName string
+		wantArg  string
+	}{
+		{
+			cmd:      `[System.IO.File]::ReadAllText("/etc/passwd")`,
+			wantName: "system.io.file::readalltext",
+			wantArg:  "/etc/passwd",
+		},
+		{
+			cmd:      `[System.IO.File]::WriteAllText("/tmp/out", "data")`,
+			wantName: "system.io.file::writealltext",
+			wantArg:  "/tmp/out",
+		},
+		{
+			cmd:      `[System.IO.File]::Delete("/etc/important")`,
+			wantName: "system.io.file::delete",
+			wantArg:  "/etc/important",
+		},
+		{
+			// Case-insensitive: [system.io.FILE] should still be detected.
+			cmd:      `[system.io.FILE]::ReadAllText('/etc/hosts')`,
+			wantName: "system.io.file::readalltext",
+			wantArg:  "/etc/hosts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantName, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.ParseErrors) > 0 {
+				t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if c.Name == tt.wantName && slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %s with arg %q; got: %+v", tt.wantName, tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// TestPSWorker_VariableCmdName_Silent documents that & $var commands are
+// silently dropped because GetCommandName() returns null for variable name
+// elements — a [GAP-SILENT] bypass.
+func TestPSWorker_VariableCmdName_Silent(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	resp, err := w.parse(`$cmd = "Get-Content"; & $cmd /etc/passwd`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(resp.ParseErrors) > 0 {
+		t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+	}
+	// [GAP-SILENT]: & $var → GetCommandName() returns null → filtered by `if ($nm)`.
+	// Neither Get-Content nor /etc/passwd appears in the output.
+	for _, c := range resp.Commands {
+		if c.Name == "Get-Content" {
+			t.Errorf("Get-Content unexpectedly found (gap may be fixed — update test): args=%v", c.Args)
+		}
+		if slices.Contains(c.Args, "/etc/passwd") {
+			t.Errorf("/etc/passwd unexpectedly found in args of %q (gap may be fixed — update test)", c.Name)
+		}
+	}
+}
+
+// TestPSWorker_ComputedCmdName_Silent documents that & (Get-Command X) Y
+// does not extract Y as a path — a [GAP-SILENT] bypass.
+func TestPSWorker_ComputedCmdName_Silent(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	resp, err := w.parse(`& (Get-Command Get-Content) /etc/passwd`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(resp.ParseErrors) > 0 {
+		t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+	}
+	// [GAP-SILENT]: /etc/passwd is an argument to the InvocationExpressionAst,
+	// not to any CommandAst. Only Get-Command (with arg "Get-Content") is found.
+	for _, c := range resp.Commands {
+		if slices.Contains(c.Args, "/etc/passwd") {
+			t.Errorf("/etc/passwd unexpectedly found in args of %q (gap may be fixed — update test)", c.Name)
+		}
+	}
+}
+
+// TestPSWorker_ConcatArg_HasSubst documents that computed argument expressions
+// (string concat, subexpressions) set has_subst=true but yield no extracted
+// path — a [GAP-PARTIAL] bypass.
+func TestPSWorker_ConcatArg_HasSubst(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name string
+		cmd  string
+	}{
+		{
+			name: "string concatenation arg",
+			cmd:  `Get-Content ("/etc" + "/passwd")`,
+		},
+		{
+			name: "char-concat variable arg",
+			cmd:  `$p = [char]47 + "etc/passwd"; Get-Content $p`,
+		},
+		{
+			name: "Join-Path subexpression",
+			cmd:  `Get-Content (Join-Path "/etc" "passwd")`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var gc *parsedCommand
+			for i := range resp.Commands {
+				if resp.Commands[i].Name == "Get-Content" {
+					gc = &resp.Commands[i]
+					break
+				}
+			}
+			if gc == nil {
+				t.Fatalf("Get-Content not found in %+v", resp.Commands)
+			}
+			// [GAP-PARTIAL]: operation type is correct (Get-Content → OpRead),
+			// but the path is not extractable from a computed expression.
+			if !gc.HasSubst {
+				t.Errorf("has_subst=false, want true (computed arg should set has_subst)")
+			}
+			if slices.Contains(gc.Args, "/etc/passwd") {
+				t.Logf("note: /etc/passwd extracted — gap may be fixed, update test")
+			}
+		})
+	}
+}
+
+// TestPSWorker_LiteralExpandableString verifies that ExpandableStringExpressionAst
+// with no embedded expressions (e.g. double-quoted strings and here-strings
+// whose value is a plain literal with no $variables) is treated as a string
+// constant and the value is extracted as an argument.
+func TestPSWorker_LiteralExpandableString(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name    string
+		cmd     string
+		wantArg string
+	}{
+		{
+			// Expandable here-string with no embedded expressions.
+			// Bug 10: previously NestedExpressions.Count==0 caused silent drop.
+			name:    "double-quoted here-string no vars",
+			cmd:     "Get-Content @\"\n/etc/passwd\n\"@",
+			wantArg: "/etc/passwd",
+		},
+		{
+			// Double-quoted string with no variables is also ExpandableString.
+			name:    "double-quoted string no vars",
+			cmd:     `Get-Content "/etc/passwd"`,
+			wantArg: "/etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.ParseErrors) > 0 {
+				t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if c.Name == "Get-Content" && slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected Get-Content with arg %q; got commands: %+v", tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// TestPSWorker_PipelineInput verifies that string literals piped into a command
+// ("/path" | Get-Content) are collected as implicit positional args. [DETECTED]
+func TestPSWorker_PipelineInput(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name    string
+		cmd     string
+		wantArg string
+	}{
+		{
+			name:    "string literal piped to Get-Content",
+			cmd:     `"/etc/passwd" | Get-Content`,
+			wantArg: "/etc/passwd",
+		},
+		{
+			name:    "variable piped to Get-Content",
+			cmd:     `$p = "/etc/passwd"; $p | Get-Content`,
+			wantArg: "/etc/passwd",
+		},
+		{
+			name:    "double-quoted string piped to Set-Content",
+			cmd:     `"/tmp/out.txt" | Set-Content -Value "data"`,
+			wantArg: "/tmp/out.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.ParseErrors) > 0 {
+				t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected arg %q in commands; got: %+v", tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// TestPSWorker_IEX_OpExecuteOnly documents that Invoke-Expression is detected
+// as OpExecute but the inner command is not recursively analyzed — a
+// [GAP-PARTIAL] bypass when the inner command is a read/write operation.
+func TestPSWorker_IEX_OpExecuteOnly(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+
+	ext := NewExtractorWithEnv(nil)
+	if err := ext.EnablePSWorker(pwshPath); err != nil {
+		t.Fatalf("EnablePSWorker: %v", err)
+	}
+	defer ext.Close()
+
+	tests := []struct {
+		name         string
+		cmd          string
+		wantOp       Operation
+		wantNotPaths []string // paths that should NOT be extracted (gap)
+	}{
+		{
+			name:         "IEX with Get-Content inner command",
+			cmd:          `Invoke-Expression "Get-Content /etc/passwd"`,
+			wantOp:       OpExecute,
+			wantNotPaths: []string{"/etc/passwd"},
+		},
+		{
+			// IEX with variable-built string: the inner command is not recursively
+			// analyzed regardless of how the IEX arg is constructed.
+			name:         "IEX with computed inner command",
+			cmd:          `$c = "Get-Content /etc/passwd"; Invoke-Expression $c`,
+			wantOp:       OpExecute,
+			wantNotPaths: []string{"/etc/passwd"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.cmd})
+			info := ext.Extract("Bash", json.RawMessage(args))
+
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation=%v, want %v", info.Operation, tt.wantOp)
+			}
+			// [GAP-PARTIAL]: inner Get-Content /etc/passwd is not recursively
+			// analyzed — /etc/passwd should NOT appear as a semantically-extracted
+			// file path (it may appear as a raw string arg to Invoke-Expression,
+			// but not as a resolved read target).
+			for _, path := range tt.wantNotPaths {
+				if slices.Contains(info.Paths, path) {
+					t.Logf("note: %q found in Paths — IEX gap may be fixed, update test", path)
+				}
+			}
+		})
+	}
+}
+
+// TestPSWorker_LoopBody_Detected verifies that commands inside ForEach-Object
+// and other loop scriptblocks ARE correctly extracted — FindAll($true) recurses
+// into nested scriptblock bodies. [DETECTED]
+func TestPSWorker_LoopBody_Detected(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name     string
+		cmd      string
+		wantName string
+		wantArg  string
+	}{
+		{
+			name:     "ForEach-Object scriptblock",
+			cmd:      `1..3 | ForEach-Object { Get-Content "/etc/passwd" }`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/passwd",
+		},
+		{
+			name:     "try/catch body",
+			cmd:      `try { Get-Content "/etc/passwd" } catch {}`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/passwd",
+		},
+		{
+			name:     "nested scriptblock via Invoke-Command",
+			cmd:      `Invoke-Command -ScriptBlock { Get-Content "/etc/passwd" }`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if c.Name == tt.wantName && slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %s with arg %q in %+v", tt.wantName, tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// TestPSWorker_BacktickObfuscation_Detected verifies that backtick-escaped
+// command names are resolved by the PS lexer before crust sees the AST.
+// Backtick obfuscation is transparent to the worker. [DETECTED]
+func TestPSWorker_BacktickObfuscation_Detected(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	// Backtick inside a command name: Get`-Content = Get-Content
+	resp, err := w.parse("Get`-Content /etc/passwd")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var found bool
+	for _, c := range resp.Commands {
+		if c.Name == "Get-Content" && slices.Contains(c.Args, "/etc/passwd") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Get-Content with /etc/passwd in %+v", resp.Commands)
+	}
+}
+
+// TestPSWorker_Splatting verifies that hashtable splatting
+// ($params = @{Path="/etc/passwd"}; Get-Content @params) correctly extracts
+// the Path value as an argument via the @params SplattedVariableExpressionAst.
+// This is Bug 11: previously HashtableAst assignments were ignored and @var
+// splatting yielded no extracted args.
+func TestPSWorker_Splatting(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name     string
+		cmd      string
+		wantName string
+		wantArg  string
+	}{
+		{
+			name:     "hashtable splatted Path value extracted",
+			cmd:      `$params = @{Path='/etc/passwd'}; Get-Content @params`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/passwd",
+		},
+		{
+			name:     "hashtable splatted with double-quoted string value",
+			cmd:      `$params = @{Path="/etc/shadow"}; Get-Content @params`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/shadow",
+		},
+		{
+			name:     "hashtable splatted multi-key: all string values extracted",
+			cmd:      `$params = @{Path='/etc/passwd'; Encoding='UTF8'}; Get-Content @params`,
+			wantName: "Get-Content",
+			wantArg:  "/etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.ParseErrors) > 0 {
+				t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if c.Name == tt.wantName && slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %s with arg %q in %+v", tt.wantName, tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
+// TestPSWorker_PipelineLoopVar verifies that $_ (the pipeline current item)
+// used inside ForEach-Object sets has_subst=true on the inner command.
+// $_ is a VariableExpressionAst which is neither StringConstantExpressionAst
+// nor CommandParameterAst, so the existing has_subst logic already catches it.
+// Bug 15 is correctly detected as uncertain — [GAP-PARTIAL].
+func TestPSWorker_PipelineLoopVar(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name         string
+		cmd          string
+		wantName     string
+		wantHasSubst bool
+	}{
+		{
+			// $_ is a VariableExpressionAst → triggers has_subst=true.
+			// The path cannot be statically resolved, so no arg is extracted.
+			name:         "ForEach-Object with $_ arg sets has_subst",
+			cmd:          `@('/etc/passwd') | ForEach-Object { Get-Content $_ }`,
+			wantName:     "Get-Content",
+			wantHasSubst: true,
+		},
+		{
+			// $_ used directly in pipeline with Get-Content.
+			name:         "pipeline $_ to Get-Content sets has_subst",
+			cmd:          `@('/etc/passwd', '/etc/hosts') | ForEach-Object { Get-Content $_ }`,
+			wantName:     "Get-Content",
+			wantHasSubst: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.ParseErrors) > 0 {
+				t.Fatalf("unexpected parse errors: %v", resp.ParseErrors)
+			}
+			var gc *parsedCommand
+			for i := range resp.Commands {
+				if resp.Commands[i].Name == tt.wantName {
+					gc = &resp.Commands[i]
+					break
+				}
+			}
+			if gc == nil {
+				t.Fatalf("%s not found in %+v", tt.wantName, resp.Commands)
+			}
+			// [GAP-PARTIAL]: $_ cannot be statically resolved, but has_subst=true
+			// correctly signals that the command has unresolvable arguments.
+			if gc.HasSubst != tt.wantHasSubst {
+				t.Errorf("has_subst=%v, want %v for cmd: %s", gc.HasSubst, tt.wantHasSubst, tt.cmd)
 			}
 		})
 	}

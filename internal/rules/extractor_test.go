@@ -3762,3 +3762,85 @@ func TestSubstitutePSVariables(t *testing.T) {
 		})
 	}
 }
+
+// TestBug9_CmdSubstVarPassedToNetwork verifies that when a bash variable is
+// assigned via command substitution (e.g., path=$(cat /tmp/secret)) and then
+// passed to a network command (curl $path), the analysis correctly detects the
+// dynamic argument that resolves to empty in dry-run mode.
+//
+// Previously-silent gap: the interpreter ran path=$(cat /tmp/secret) and set
+// path="" (dry-run external commands return no output), then curl $path became
+// curl with no args. The operation was set to OpNetwork but no evasive signal
+// was emitted, silently allowing potential exfiltration to an unknown destination.
+//
+// Fix: per-command HasSubst tracking now flags this as Evasive=true.
+func TestBug9_CmdSubstVarPassedToNetwork(t *testing.T) {
+	extractor := NewExtractorWithEnv(nil)
+
+	tests := []struct {
+		name        string
+		command     string
+		wantOp      Operation
+		wantEvasive bool
+		desc        string
+	}{
+		{
+			name:        "path via cmdsubst passed to curl",
+			command:     "path=$(cat /tmp/secret); curl $path",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "curl URL comes from $(cat ...) — dry-run returns empty, destination unknown",
+		},
+		{
+			name:        "url via backtick cmdsubst passed to curl",
+			command:     "url=`cat /tmp/secret`; curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "backtick form of command substitution assignment also flagged",
+		},
+		{
+			name:        "direct cmdsubst in curl arg",
+			command:     "curl $(cat /tmp/url)",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "direct CmdSubst in curl's arg collapses to empty in dry-run",
+		},
+		{
+			name:        "literal assignment not flagged",
+			command:     "url=https://example.com; curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: false,
+			desc:        "literal variable assignment is expanded correctly — not evasive",
+		},
+		{
+			name:        "builtin cmdsubst resolves real value",
+			command:     "url=$(echo https://example.com); curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: false,
+			desc:        "$(echo ...) is a builtin — produces real output in dry-run, not evasive",
+		},
+		{
+			name:        "read cmd is not flagged network evasive",
+			command:     "secret=$(cat /tmp/secret); cat $secret",
+			wantOp:      OpRead,
+			wantEvasive: false,
+			desc:        "read commands with empty dynVar arg are not flagged (only network/execute)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+
+			if info.Evasive != tt.wantEvasive {
+				t.Errorf("Evasive = %v, want %v (reason: %q)\n  desc: %s",
+					info.Evasive, tt.wantEvasive, info.EvasiveReason, tt.desc)
+			}
+			if tt.wantOp != OpNone && info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v\n  desc: %s",
+					info.Operation, tt.wantOp, tt.desc)
+			}
+		})
+	}
+}

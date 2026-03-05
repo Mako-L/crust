@@ -52,6 +52,11 @@ func normalizeParsedCmdName(name string) string {
 	if name == "[" {
 		return "test"
 	}
+	// .NET static calls arrive as "System.IO.File::ReadAllText" — normalize to
+	// lowercase so commandDB lookups are case-insensitive for .NET names.
+	if strings.Contains(name, "::") {
+		return strings.ToLower(name)
+	}
 	return name
 }
 
@@ -809,6 +814,40 @@ func defaultCommandDB() map[string]CommandInfo {
 		"ipmo":                   {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-Name"}},
 		"Register-ScheduledTask": {Operation: OpExecute, PathArgIndex: []int{0}},
 		"Start-Job":              {Operation: OpExecute, PathArgIndex: []int{0}, PathFlags: []string{"-ScriptBlock", "-FilePath"}},
+
+		// .NET static API calls — keys are lowercased (normalizeParsedCmdName
+		// lowercases any name containing "::").
+		// System.IO.File
+		"system.io.file::readalltext":    {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::readallbytes":   {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::readalllines":   {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::openread":       {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::open":           {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::exists":         {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.file::writealltext":   {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::writeallbytes":  {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::writealllines":  {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::appendalltext":  {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::appendalllines": {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::openwrite":      {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::create":         {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.file::copy":           {Operation: OpCopy, PathArgIndex: []int{0, 1}},
+		"system.io.file::move":           {Operation: OpMove, PathArgIndex: []int{0, 1}},
+		"system.io.file::delete":         {Operation: OpDelete, PathArgIndex: []int{0}},
+		// System.IO.Directory
+		"system.io.directory::getfiles":         {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.directory::getdirectories":   {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.directory::getentryfssinfos": {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.directory::exists":           {Operation: OpRead, PathArgIndex: []int{0}},
+		"system.io.directory::createdirectory":  {Operation: OpWrite, PathArgIndex: []int{0}},
+		"system.io.directory::move":             {Operation: OpMove, PathArgIndex: []int{0, 1}},
+		"system.io.directory::delete":           {Operation: OpDelete, PathArgIndex: []int{0}},
+		// System.Net — static helpers
+		"system.net.dns::gethostaddresses": {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"system.net.dns::gethostentry":     {Operation: OpNetwork, PathArgIndex: []int{0}},
+		"system.net.dns::resolve":          {Operation: OpNetwork, PathArgIndex: []int{0}},
+		// System.Diagnostics.Process
+		"system.diagnostics.process::start": {Operation: OpExecute, PathArgIndex: []int{0}},
 	}
 }
 
@@ -1255,8 +1294,9 @@ func (e *Extractor) inferPowerShellOperation(info *ExtractedInfo, cmd string) {
 // code string. Tries the bash parser first (simple cmdlet calls parse as
 // valid POSIX), then falls back to regex heuristics for paths and hosts.
 //
-// NOTE: PowerShell variables ($p, $env:HOME) are not expanded — the bash
-// interpreter cannot resolve PS variable syntax. This is a known limitation.
+// NOTE: On Windows, the pwsh worker resolves PowerShell variables ($p,
+// $env:HOME) via AST parsing before this path is reached. Here the bash
+// interpreter is used as a fallback and cannot resolve PS variable syntax.
 func (e *Extractor) parsePowerShellInnerCommand(info *ExtractedInfo, innerCmd string, depth int, parentSymtab map[string]string) {
 	innerCmd = strings.Trim(innerCmd, `"'`)
 	if innerCmd == "" {
@@ -1343,11 +1383,13 @@ const (
 
 func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands []parsedCommand, depth int, parentSymtab map[string]string) {
 	for cmdIdx, pc := range commands {
-		// NOTE: HasSubst is NOT used to set Evasive here. The shell interpreter
-		// expands $() in dry-run mode (builtins like echo produce real output),
-		// so successfully-parsed commands with substitutions have their paths
-		// correctly extracted. Evasive is only set when the runner FAILS to
-		// analyze the command (see extractBashCommand line ~518).
+		// NOTE: HasSubst is used below to set Evasive ONLY for network/execute
+		// commands whose args collapsed to empty because a CmdSubst-assigned
+		// variable expanded to "" in dry-run. For all other cases (builtins
+		// like echo produce real output; args with literal content are fine),
+		// Evasive is only set when the runner FAILS to analyze the command
+		// (see extractBashCommand). HasSubst is now per-command (not file-wide)
+		// so it only fires when THIS command's args had dynamic content.
 
 		// Resolve the actual command name and args, skipping wrappers like sudo/env
 		cmdName, args := e.resolveCommand(pc.Name, pc.Args)
@@ -1500,6 +1542,31 @@ func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands
 
 			// No -Command or -EncodedCommand found.
 			// Fall through to command DB lookup for -File and positional args.
+		}
+
+		// SECURITY (Bug 9): When a command's arguments were assigned from a
+		// command substitution (e.g., path=$(cat /secret); curl $path), the
+		// dry-run interpreter returns empty output for external commands, so
+		// $path expands to "". The target URL/path is invisible to static
+		// analysis. Detect this: if HasSubst=true (the arg used a CmdSubst-
+		// assigned variable or a direct CmdSubst) AND the command has no args
+		// after expansion AND it is a network or execute command, flag evasive.
+		// HasSubst is now per-command (not file-wide), so this only fires when
+		// THIS command's args specifically had dynamic content.
+		if pc.HasSubst && len(args) == 0 {
+			if dbInfo, inDB := e.commandDB[cmdName]; inDB {
+				if dbInfo.Operation == OpNetwork || dbInfo.Operation == OpExecute {
+					if operationPriority(dbInfo.Operation) > operationPriority(info.Operation) {
+						info.Operation = dbInfo.Operation
+					}
+					if !info.Evasive {
+						info.Evasive = true
+						info.EvasiveReason = fmt.Sprintf(
+							"command %q has arguments from command substitution that resolved to empty in dry-run; actual targets cannot be determined statically",
+							cmdName)
+					}
+				}
+			}
 		}
 
 		// Look up in command database
@@ -2241,6 +2308,109 @@ func astHasSubst(file *syntax.File) bool {
 	return found
 }
 
+// astDynAssignedVars returns the set of variable names that are assigned
+// via command substitution ($(cmd) or `cmd`) anywhere in the file.
+// In dry-run mode, external commands return no output, so these variables
+// always expand to empty string — hiding dynamic targets from static analysis.
+func astDynAssignedVars(file *syntax.File) map[string]bool {
+	dynVars := make(map[string]bool)
+	syntax.Walk(file, func(node syntax.Node) bool {
+		assign, ok := node.(*syntax.Assign)
+		if !ok || assign.Value == nil {
+			return true
+		}
+		if wordHasCmdSubstOnly(assign.Value) {
+			dynVars[assign.Name.Value] = true
+		}
+		return true
+	})
+	return dynVars
+}
+
+// wordHasCmdSubstOnly returns true if a Word contains a command substitution
+// ($(cmd) or backtick), but NOT process substitutions or arithmetic expansions.
+// Used to identify variables assigned from external command output.
+func wordHasCmdSubstOnly(w *syntax.Word) bool {
+	for _, part := range w.Parts {
+		switch part.(type) {
+		case *syntax.CmdSubst:
+			return true
+		}
+		if dq, ok := part.(*syntax.DblQuoted); ok {
+			for _, inner := range dq.Parts {
+				if _, ok := inner.(*syntax.CmdSubst); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// astCmdsWithDynArgs returns a set of command names (normalized) whose call-site
+// arguments (everything after arg[0]) reference either:
+//   - a variable from dynVars (ParamExp to a CmdSubst-assigned var), or
+//   - a direct command substitution (CmdSubst node in the arg word).
+//
+// These commands may receive empty arguments in dry-run mode, making their
+// targets invisible to static analysis.
+func astCmdsWithDynArgs(file *syntax.File, dynVars map[string]bool) map[string]bool {
+	result := make(map[string]bool)
+	syntax.Walk(file, func(node syntax.Node) bool {
+		stmt, ok := node.(*syntax.Stmt)
+		if !ok {
+			return true
+		}
+		call, ok := stmt.Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		name := normalizeParsedCmdName(wordToLiteral(call.Args[0]))
+		if name == "" {
+			return true
+		}
+		// Inspect each arg after the command name for dynamic content.
+		for _, w := range call.Args[1:] {
+			if wordHasDynContent(w, dynVars) {
+				result[name] = true
+				break
+			}
+		}
+		return true
+	})
+	return result
+}
+
+// wordHasDynContent returns true if a Word contains a direct CmdSubst or
+// a ParamExp that references a variable in dynVars (i.e., a variable that
+// was assigned from command substitution and may be empty in dry-run).
+func wordHasDynContent(w *syntax.Word, dynVars map[string]bool) bool {
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			_ = p // direct substitution in arg — always dynamic
+			return true
+		case *syntax.ParamExp:
+			if dynVars[p.Param.Value] {
+				return true
+			}
+		case *syntax.DblQuoted:
+			for _, inner := range p.Parts {
+				switch ip := inner.(type) {
+				case *syntax.CmdSubst, *syntax.ProcSubst:
+					_ = ip
+					return true
+				case *syntax.ParamExp:
+					if dynVars[ip.Param.Value] {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 // collectInnerStmts extracts interpretable inner statements from unsafe AST
 // constructs. ProcSubst has Stmts []*Stmt (commands inside <(...) or >(...)),
 // and CoprocClause has Stmt *Stmt (the inner command). These inner commands
@@ -2681,7 +2851,14 @@ func (e *Extractor) runShellFileInterp(file *syntax.File, parentSymtab map[strin
 		}
 	}()
 
-	hasSubst := astHasSubst(file)
+	// Pre-compute which command names have args that depend on dynamic content:
+	// either a direct command substitution ($(cmd)) or a variable that was
+	// assigned via command substitution (path=$(cmd); curl $path). In dry-run
+	// mode, external commands produce no output, so these args collapse to empty.
+	// This enables per-command HasSubst tracking rather than a file-wide flag.
+	dynVars := astDynAssignedVars(file)
+	dynArgCmds := astCmdsWithDynArgs(file, dynVars)
+
 	env := buildRunnerEnv(e.env, parentSymtab)
 
 	var commands []parsedCommand
@@ -2705,10 +2882,11 @@ func (e *Extractor) runShellFileInterp(file *syntax.File, parentSymtab map[strin
 				return args, nil
 			}
 			mu.Lock()
+			cmdNorm := normalizeParsedCmdName(args[0])
 			pc := parsedCommand{
-				Name:     normalizeParsedCmdName(args[0]),
+				Name:     cmdNorm,
 				Args:     slices.Clone(args[1:]),
-				HasSubst: hasSubst,
+				HasSubst: dynArgCmds[cmdNorm],
 			}
 			pc.RedirPaths = pendingRedirOut
 			pc.RedirInPaths = pendingRedirIn

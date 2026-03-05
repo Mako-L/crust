@@ -1086,10 +1086,17 @@ func FuzzGlobCommandBypass(f *testing.F) {
 		}
 		info := extractor.Extract("Bash", json.RawMessage(args))
 
-		// Re-parse to check command names independently.
-		// Use info.Command (JSON-round-tripped) to match what the extractor sees,
-		// since json.Marshal replaces invalid UTF-8 with U+FFFD.
-		parsed, _ := NewExtractorWithEnv(nil).parseShellCommandsExpand(info.Command, nil)
+		// Re-parse the JSON-round-tripped command to match exactly what the
+		// extractor receives. json.Marshal replaces invalid UTF-8 with U+FFFD;
+		// unmarshal back to get the same string the extractor parses.
+		// Do NOT use info.Command: it is the minified AST output (not the input)
+		// and may differ from the input (e.g. trailing newline from minPrinter).
+		var cmdMap map[string]string
+		if err := json.Unmarshal(args, &cmdMap); err != nil {
+			return
+		}
+		cmdForOracle := cmdMap["command"]
+		parsed, _ := NewExtractorWithEnv(nil).parseShellCommandsExpand(cmdForOracle, nil)
 
 		// Find resolved command names (skip wrappers like sudo/env)
 		hasGlobInCmdName := false
@@ -1113,7 +1120,7 @@ func FuzzGlobCommandBypass(f *testing.F) {
 		// has substitution — the oracle can't resolve names through $()
 		// or backticks, so it may disagree with the extractor about what
 		// the resolved command name is.
-		hasSubst := strings.Contains(info.Command, "$(") || strings.Contains(info.Command, "`")
+		hasSubst := strings.Contains(cmdForOracle, "$(") || strings.Contains(cmdForOracle, "`")
 		if !hasSubst {
 			for _, pc := range parsed {
 				if pc.HasSubst {

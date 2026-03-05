@@ -1160,7 +1160,9 @@ func runMCPDiscover(args []string) {
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(result) //nolint:errcheck
+		if err := enc.Encode(result); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		return
 	}
 

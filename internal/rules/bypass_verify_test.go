@@ -1251,3 +1251,46 @@ func TestBypassFix_PowerShellCmdlets(t *testing.T) {
 		})
 	}
 }
+
+// TestBypassFix_BracketCommand verifies that the POSIX "[" command (alias for
+// "test") is normalised to "test" at parse time so it is never confused with a
+// glob character. Before the fix, "[" contains "[" which passes
+// strings.ContainsAny(cmdName, "*?["), incorrectly flagging it as glob-evasive.
+func TestBypassFix_BracketCommand(t *testing.T) {
+	engine := newTestEngine(t)
+	ext := NewExtractor()
+
+	evasiveTests := []struct {
+		name        string
+		command     string
+		wantEvasive bool
+	}{
+		// "[" normalises to "test" — must NOT be glob-evasive.
+		{"bracket-alone", "[ -f /home/user/.env ]", false},
+		{"bracket-in-pipeline", "[ -f /tmp/x ] && echo ok", false},
+		// Real glob in command base name — must still be caught.
+		{"glob-question-cmd", "/???/??t /home/user/.env", true},
+		{"glob-wildcard-cmd", "c?t /etc/shadow", true},
+	}
+	for _, tt := range evasiveTests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]any{"command": tt.command})
+			info := ext.Extract("Bash", json.RawMessage(args))
+			if info.Evasive != tt.wantEvasive {
+				t.Errorf("Evasive=%v, want %v (reason: %s)", info.Evasive, tt.wantEvasive, info.EvasiveReason)
+			}
+		})
+	}
+
+	// "[" followed by a safe path must never produce a false positive block.
+	safeArgs, _ := json.Marshal(map[string]any{"command": "[ -f /tmp/safe.txt ] && echo ok"})
+	if r := engine.Evaluate(ToolCall{Name: "Bash", Arguments: json.RawMessage(safeArgs)}); r.Matched {
+		t.Errorf("[ on safe path falsely blocked by rule %q", r.RuleName)
+	}
+
+	// Glob in command name must still block when the path is sensitive.
+	evasiveArgs, _ := json.Marshal(map[string]any{"command": "/???/??t /home/user/.env"})
+	if r := engine.Evaluate(ToolCall{Name: "Bash", Arguments: json.RawMessage(evasiveArgs)}); !r.Matched {
+		t.Error("glob-evasive command reading .env was not blocked")
+	}
+}

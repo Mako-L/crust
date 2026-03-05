@@ -3400,6 +3400,91 @@ func TestPowerShellGap_WindowsPathFormats(t *testing.T) {
 	}
 }
 
+// TestPowerShellAbsolutePathCmdlet verifies that PS cmdlets invoked via their
+// absolute filesystem path (e.g. C:\Windows\...\Get-Content.ps1) are still
+// recognized by inferPowerShellOperation after stripPathPrefix strips the
+// directory component.
+func TestPowerShellAbsolutePathCmdlet(t *testing.T) {
+	extractor := NewExtractorWithEnv(nil)
+
+	tests := []struct {
+		name    string
+		command string
+		wantOp  Operation
+	}{
+		{
+			name:    "absolute-path-Get-Content",
+			command: `C:/Windows/System32/WindowsPowerShell/v1.0/Get-Content /home/user/.env`,
+			wantOp:  OpRead,
+		},
+		{
+			name:    "absolute-path-Remove-Item",
+			command: `C:/Windows/System32/WindowsPowerShell/v1.0/Remove-Item /home/user/.env`,
+			wantOp:  OpDelete,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v", info.Operation, tt.wantOp)
+			}
+		})
+	}
+}
+
+// TestPowerShellRedirectPaths verifies that redirect paths in PS commands
+// (e.g. Get-Content .env > stolen.txt) are extracted by the pwsh worker.
+// The redirect destination is a write path; combining with a read-arg means
+// the dominant operation is write (higher severity). Both paths must appear
+// in Paths so they can be matched against security rules.
+func TestPowerShellRedirectPaths(t *testing.T) {
+	if runtime.GOOS != goosWindows {
+		t.Skip("pwsh worker redirect extraction requires Windows")
+	}
+	extractor := NewExtractor()
+
+	tests := []struct {
+		name      string
+		command   string
+		wantPaths []string // all paths that must appear in info.Paths
+		wantOp    Operation
+	}{
+		{
+			// Get-Content reads .env, output redirected to stolen.txt.
+			// Redirect-out is a write, which has higher severity than read.
+			name:      "Get-Content redirect out",
+			command:   "Get-Content /home/user/.env > /tmp/stolen.txt",
+			wantPaths: []string{"/home/user/.env", "/tmp/stolen.txt"},
+			wantOp:    OpWrite,
+		},
+		{
+			// Set-Content writes to out.txt with input redirected from .env.
+			name:      "Set-Content redirect in",
+			command:   "Set-Content /tmp/out.txt < /home/user/.env",
+			wantPaths: []string{"/home/user/.env"},
+			wantOp:    OpWrite,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+			if info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v", info.Operation, tt.wantOp)
+			}
+			for _, p := range tt.wantPaths {
+				if !slices.Contains(info.Paths, p) {
+					t.Errorf("expected path %q in %v", p, info.Paths)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodePowerShellEncodedCommand(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -3673,6 +3758,88 @@ func TestSubstitutePSVariables(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := substitutePSVariables(tt.input); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBug9_CmdSubstVarPassedToNetwork verifies that when a bash variable is
+// assigned via command substitution (e.g., path=$(cat /tmp/secret)) and then
+// passed to a network command (curl $path), the analysis correctly detects the
+// dynamic argument that resolves to empty in dry-run mode.
+//
+// Previously-silent gap: the interpreter ran path=$(cat /tmp/secret) and set
+// path="" (dry-run external commands return no output), then curl $path became
+// curl with no args. The operation was set to OpNetwork but no evasive signal
+// was emitted, silently allowing potential exfiltration to an unknown destination.
+//
+// Fix: per-command HasSubst tracking now flags this as Evasive=true.
+func TestBug9_CmdSubstVarPassedToNetwork(t *testing.T) {
+	extractor := NewExtractorWithEnv(nil)
+
+	tests := []struct {
+		name        string
+		command     string
+		wantOp      Operation
+		wantEvasive bool
+		desc        string
+	}{
+		{
+			name:        "path via cmdsubst passed to curl",
+			command:     "path=$(cat /tmp/secret); curl $path",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "curl URL comes from $(cat ...) — dry-run returns empty, destination unknown",
+		},
+		{
+			name:        "url via backtick cmdsubst passed to curl",
+			command:     "url=`cat /tmp/secret`; curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "backtick form of command substitution assignment also flagged",
+		},
+		{
+			name:        "direct cmdsubst in curl arg",
+			command:     "curl $(cat /tmp/url)",
+			wantOp:      OpNetwork,
+			wantEvasive: true,
+			desc:        "direct CmdSubst in curl's arg collapses to empty in dry-run",
+		},
+		{
+			name:        "literal assignment not flagged",
+			command:     "url=https://example.com; curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: false,
+			desc:        "literal variable assignment is expanded correctly — not evasive",
+		},
+		{
+			name:        "builtin cmdsubst resolves real value",
+			command:     "url=$(echo https://example.com); curl $url",
+			wantOp:      OpNetwork,
+			wantEvasive: false,
+			desc:        "$(echo ...) is a builtin — produces real output in dry-run, not evasive",
+		},
+		{
+			name:        "read cmd is not flagged network evasive",
+			command:     "secret=$(cat /tmp/secret); cat $secret",
+			wantOp:      OpRead,
+			wantEvasive: false,
+			desc:        "read commands with empty dynVar arg are not flagged (only network/execute)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := extractor.Extract("Bash", json.RawMessage(args))
+
+			if info.Evasive != tt.wantEvasive {
+				t.Errorf("Evasive = %v, want %v (reason: %q)\n  desc: %s",
+					info.Evasive, tt.wantEvasive, info.EvasiveReason, tt.desc)
+			}
+			if tt.wantOp != OpNone && info.Operation != tt.wantOp {
+				t.Errorf("Operation = %v, want %v\n  desc: %s",
+					info.Operation, tt.wantOp, tt.desc)
 			}
 		})
 	}

@@ -369,11 +369,11 @@ func defaultCommandDB() map[string]CommandInfo {
 		"b2sum":     {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 
 		// Text processing (read)
-		"awk":   {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}},
-		"gawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}},
-		"mawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}},
-		"nawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}},
-		"sed":   {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}}, // -i becomes write but still reads first
+		"awk":   {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}, PathFlags: []string{"-f", "--file"}},
+		"gawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}, PathFlags: []string{"-f", "--file"}},
+		"mawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}, PathFlags: []string{"-f"}},
+		"nawk":  {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}, PathFlags: []string{"-f"}},
+		"sed":   {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5}, PathFlags: []string{"-f", "--file"}}, // -i becomes write (extractor_commands.go)
 		"cut":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"sort":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"uniq":  {Operation: OpRead, PathArgIndex: []int{0, 1}},
@@ -444,22 +444,22 @@ func defaultCommandDB() map[string]CommandInfo {
 		"zip":     {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3}},
 		"unzip":   {Operation: OpWrite, PathArgIndex: []int{0}},
 		"gzip":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
-		"gunzip":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"gunzip":  {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2}}, // reads compressed, writes decompressed
 		"zcat":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"bzip2":   {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
-		"bunzip2": {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"bunzip2": {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2}},
 		"bzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"xz":      {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"xzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"lzma":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
-		"unlzma":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"unlzma":  {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2}},
 		"lzcat":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"zstd":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
-		"unzstd":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"unzstd":  {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2}},
 		"zstdcat": {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
 		"lz4":     {Operation: OpWrite, PathArgIndex: []int{0, 1}},
 		"lz4cat":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
-		"unlz4":   {Operation: OpRead, PathArgIndex: []int{0, 1}},
+		"unlz4":   {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1}},
 		"cpio":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2}, PathFlags: []string{"-F", "--file", "-I", "-E"}},
 		"ar":      {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
 		"7z":      {Operation: OpRead, PathArgIndex: []int{1, 2, 3}},
@@ -473,7 +473,7 @@ func defaultCommandDB() map[string]CommandInfo {
 		"install":  {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}, SkipFlags: []string{"-m", "--mode", "-o", "--owner", "-g", "--group"}},
 		"mkdir":    {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 		"sponge":   {Operation: OpWrite, PathArgIndex: []int{0}},
-		"truncate": {Operation: OpWrite, PathArgIndex: []int{0, 1}, SkipFlags: []string{"-s", "--size"}},
+		"truncate": {Operation: OpWrite, PathArgIndex: []int{0, 1}, PathFlags: []string{"-r", "--reference"}, SkipFlags: []string{"-s", "--size"}},
 		"patch":    {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-i", "--input", "-o", "--output"}},
 		"chmod":    {Operation: OpWrite, PathArgIndex: []int{1, 2, 3, 4, 5}}, // arg0 = mode
 		"chown":    {Operation: OpWrite, PathArgIndex: []int{1, 2, 3, 4, 5}}, // arg0 = owner[:group]
@@ -554,7 +554,7 @@ func defaultCommandDB() map[string]CommandInfo {
 
 		// Filesystem metadata modification
 		"chattr":  {Operation: OpWrite, PathArgIndex: []int{1, 2, 3, 4, 5}},
-		"setfacl": {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}, SkipFlags: []string{"-m", "--modify", "-M", "--modify-file", "-x", "--remove", "-X", "--remove-file"}},
+		"setfacl": {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}, PathFlags: []string{"-M", "--modify-file", "-X", "--remove-file"}, SkipFlags: []string{"-m", "--modify", "-x", "--remove"}},
 		"xattr":   {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 		"chflags": {Operation: OpWrite, PathArgIndex: []int{1, 2, 3, 4, 5}},
 
@@ -730,8 +730,8 @@ func defaultCommandDB() map[string]CommandInfo {
 		"Rscript": {Operation: OpExecute, PathArgIndex: []int{0}},
 
 		// Indirect execution
-		"xargs":  {Operation: OpExecute, PathArgIndex: []int{0, 1, 2}},
-		"find":   {Operation: OpExecute, PathArgIndex: []int{0}},
+		"xargs":  {Operation: OpExecute, PathFlags: []string{"-a", "--arg-file"}},               // arg0 is a command name, not a path
+		"find":   {Operation: OpRead, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}}, // searches dirs (read), may -exec commands
 		"eval":   {Operation: OpExecute, PathArgIndex: []int{0}},
 		"source": {Operation: OpExecute, PathArgIndex: []int{0}},
 		".":      {Operation: OpExecute, PathArgIndex: []int{0}}, // source alias
@@ -1710,7 +1710,12 @@ func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands
 			}
 		}
 
-		// Look up in command database
+		// Look up in command database.
+		// For [Type]::new(...) constructors, the bootstrap emits "typename::new";
+		// fall back to "typename" (strip "::new") so the type's commandDB entry matches.
+		if _, ok := e.commandDB[lookupName]; !ok && strings.HasSuffix(lookupName, "::new") {
+			lookupName = strings.TrimSuffix(lookupName, "::new")
+		}
 		cmdInfo, found := e.commandDB[lookupName]
 		if found {
 			// Register the primary operation (may upgrade info.Operation if higher priority)

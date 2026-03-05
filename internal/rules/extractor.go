@@ -14,7 +14,6 @@ import (
 	"os"
 	"path"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,10 +46,8 @@ type ExtractedInfo struct {
 // Use this for dynamic operations derived from arguments (output flags,
 // interpreter code, redirects). For CommandInfo.ExtraOps use appendExtraOp.
 func (info *ExtractedInfo) addOperation(op Operation) {
-	for _, existing := range info.Operations {
-		if existing == op {
-			return
-		}
+	if slices.Contains(info.Operations, op) {
+		return
 	}
 	info.Operations = append(info.Operations, op)
 	if operationPriority(op) > operationPriority(info.Operation) {
@@ -64,13 +61,10 @@ func (info *ExtractedInfo) addOperation(op Operation) {
 // ExtraOps are secondary capabilities that matter for rule matching but do not
 // override the primary classification.
 func (info *ExtractedInfo) appendExtraOp(op Operation) {
-	for _, existing := range info.Operations {
-		if existing == op {
-			return
-		}
+	if !slices.Contains(info.Operations, op) {
+		info.Operations = append(info.Operations, op)
+		// Intentionally does NOT update info.Operation
 	}
-	info.Operations = append(info.Operations, op)
-	// Intentionally does NOT update info.Operation
 }
 
 // forceOperation sets info.Operation regardless of priority and adds op to
@@ -80,12 +74,9 @@ func (info *ExtractedInfo) appendExtraOp(op Operation) {
 // a WebFetch URL is a file:// path (OpRead overrides OpNetwork).
 func (info *ExtractedInfo) forceOperation(op Operation) {
 	info.Operation = op
-	for _, existing := range info.Operations {
-		if existing == op {
-			return
-		}
+	if !slices.Contains(info.Operations, op) {
+		info.Operations = append(info.Operations, op)
 	}
-	info.Operations = append(info.Operations, op)
 }
 
 // normalizeParsedCmdName normalizes a raw command name from the shell AST into
@@ -332,10 +323,10 @@ func defaultCommandDB() map[string]CommandInfo {
 		"less": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 		"more": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
 		"grep": {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5, 6, 7, 8, 9}, SkipFlags: []string{"-e", "--regexp", "-m", "--max-count", "-A", "-B", "-C", "--context"}},
-		"vim":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"vi":   {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"nano": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"view": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
+		"vim":  {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
+		"vi":   {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
+		"nano": {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
+		"view": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}}, // read-only vi variant
 
 		// Directory listing
 		"ls":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
@@ -401,12 +392,12 @@ func defaultCommandDB() map[string]CommandInfo {
 		"rg":    {Operation: OpRead, PathArgIndex: []int{1, 2, 3, 4, 5, 6, 7, 8, 9}, SkipFlags: []string{"-e", "--regexp", "-m", "--max-count", "-A", "-B", "-C", "--context", "-t", "--type", "-g", "--glob"}},
 
 		// Editors (GTFOBins: file-read)
-		"ed":    {Operation: OpRead, PathArgIndex: []int{0}},
-		"ex":    {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
-		"emacs": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"rview": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"rvim":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
-		"pico":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2}},
+		"ed":    {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0}},
+		"ex":    {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2, 3}},
+		"emacs": {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2, 3, 4, 5}},
+		"rview": {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}}, // read-only vim variant
+		"rvim":  {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3, 4, 5}}, // restricted vim (no shell/write cmds)
+		"pico":  {Operation: OpRead, ExtraOps: []Operation{OpWrite}, PathArgIndex: []int{0, 1, 2}},
 
 		// Pagers / display tools
 		"pg":     {Operation: OpRead, PathArgIndex: []int{0, 1, 2, 3}},
@@ -556,6 +547,7 @@ func defaultCommandDB() map[string]CommandInfo {
 
 		// GTFOBins file-write binaries
 		"gdb":    {Operation: OpExecute, ExtraOps: []Operation{OpRead}, PathArgIndex: []int{0, 1}, PathFlags: []string{"-x", "--command", "--core"}},
+		"lldb":   {Operation: OpExecute, ExtraOps: []Operation{OpRead}, PathArgIndex: []int{0, 1}, PathFlags: []string{"-o", "-s", "-S", "--source", "--one-line"}},
 		"screen": {Operation: OpWrite, PathArgIndex: []int{0}, PathFlags: []string{"-L", "-Logfile"}},
 		"tmux":   {Operation: OpWrite, PathArgIndex: []int{0, 1, 2}},
 		"script": {Operation: OpWrite, PathArgIndex: []int{0}},
@@ -691,16 +683,16 @@ func defaultCommandDB() map[string]CommandInfo {
 		"nc.traditional": {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},
 		"nc.openbsd":     {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},
 		"netcat":         {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},
-		"ssh":            {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}}, // executes remote commands
+		"ssh":            {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},       // executes remote commands
 		"sftp":           {Operation: OpNetwork, ExtraOps: []Operation{OpRead, OpWrite}, PathArgIndex: []int{0}}, // reads/writes remote files
 		"ftp":            {Operation: OpNetwork, ExtraOps: []Operation{OpRead, OpWrite}, PathArgIndex: []int{0}}, // get/put
-		"telnet":         {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}}, // interactive shell access
+		"telnet":         {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},       // interactive shell access
 		"nmap":           {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2, 3}},
 		"ping":           {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"dig":            {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"nslookup":       {Operation: OpNetwork, PathArgIndex: []int{0}},
-		"socat":          {Operation: OpRead, PathArgIndex: []int{0, 1}}, // upgraded to execute/network based on address types in args
-		"ncat":           {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}},   // --exec/--sh-exec for remote code execution
+		"socat":          {Operation: OpRead, PathArgIndex: []int{0, 1}},                                   // upgraded to execute/network based on address types in args
+		"ncat":           {Operation: OpNetwork, ExtraOps: []Operation{OpExecute}, PathArgIndex: []int{0}}, // --exec/--sh-exec for remote code execution
 		"aria2c":         {Operation: OpNetwork, PathArgIndex: []int{0}},
 		"http":           {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2}},
 		"whois":          {Operation: OpNetwork, PathArgIndex: []int{0}},
@@ -1114,7 +1106,7 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 		// When the pwsh worker is available (Windows), use dual-parse:
 		// bash parser + PS native AST. The heuristic transform (substitutePSVariables
 		// + normalizePSBackslashPaths) is the fallback when pwsh is not available.
-		if runtime.GOOS == goosWindows && e.pwshWorker == nil && looksLikePowerShell(cmd) {
+		if isNativeWindowsEnv() && e.pwshWorker == nil && looksLikePowerShell(cmd) {
 			cmd = substitutePSVariables(cmd)
 			cmd = normalizePSBackslashPaths(cmd)
 		}
@@ -1731,11 +1723,8 @@ func (e *Extractor) extractFromParsedCommandsDepth(info *ExtractedInfo, commands
 			e.extractPathsFromArgs(info, cmdName, args, cmdInfo)
 
 			// For network commands (primary or extra), extract hosts from all args
-			for _, op := range cmdInfo.AllOperations() {
-				if op == OpNetwork {
-					info.Hosts = append(info.Hosts, extractHosts(args)...)
-					break
-				}
+			if slices.Contains(cmdInfo.AllOperations(), OpNetwork) {
+				info.Hosts = append(info.Hosts, extractHosts(args)...)
 			}
 
 			// SECURITY: Network commands with file-upload flags (--post-file,

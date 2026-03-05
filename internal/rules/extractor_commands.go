@@ -6,14 +6,14 @@ import "strings"
 // that cannot be expressed in the static commandDB. Called from
 // extractFromParsedCommandsDepth after the generic path/host extraction.
 func (e *Extractor) applyCommandSpecificExtraction(info *ExtractedInfo, cmdName string, args []string) {
-	switch {
-	case cmdName == "scp" || cmdName == "rsync":
+	switch cmdName {
+	case "scp", "rsync":
 		extractScpRsyncHosts(info, args)
-	case cmdName == "socat":
+	case "socat":
 		extractSocatAddresses(info, args)
-	case cmdName == "tar":
+	case "tar":
 		extractTarMode(info, args)
-	case cmdName == "sed":
+	case "sed":
 		extractSedInPlace(info, args)
 	}
 }
@@ -49,20 +49,16 @@ func extractSocatAddresses(info *ExtractedInfo, args []string) {
 		case strings.HasPrefix(argUpper, "UNIX:") || strings.HasPrefix(argUpper, "UNIX4:") || strings.HasPrefix(argUpper, "UNIX6:"),
 			strings.HasPrefix(argUpper, "ABSTRACT:"):
 			// UNIX domain socket — extract path so path rules fire
-			if colonIdx := strings.Index(arg, ":"); colonIdx >= 0 {
-				if sockPath := arg[colonIdx+1:]; sockPath != "" {
-					info.Paths = append(info.Paths, sockPath)
-				}
+			if _, sockPath, ok := strings.Cut(arg, ":"); ok && sockPath != "" {
+				info.Paths = append(info.Paths, sockPath)
 			}
 			info.addOperation(OpNetwork)
 		case strings.HasPrefix(argUpper, "EXEC:") || strings.HasPrefix(argUpper, "EXEC4:") || strings.HasPrefix(argUpper, "EXEC6:"),
 			strings.HasPrefix(argUpper, "SYSTEM:"):
 			info.addOperation(OpExecute)
 		case strings.HasPrefix(argUpper, "OPEN:") || strings.HasPrefix(argUpper, "CREATE:"):
-			if colonIdx := strings.Index(arg, ":"); colonIdx >= 0 {
-				if filePath := arg[colonIdx+1:]; filePath != "" {
-					info.Paths = append(info.Paths, filePath)
-				}
+			if _, filePath, ok := strings.Cut(arg, ":"); ok && filePath != "" {
+				info.Paths = append(info.Paths, filePath)
 			}
 		}
 	}

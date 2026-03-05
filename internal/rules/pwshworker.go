@@ -26,6 +26,7 @@ import (
 // Supported platforms: Windows 10/11 (powershell.exe 5.1 always present;
 // pwsh.exe 7+ used when available).
 const psBootstrapScript = `
+using namespace System.Management.Automation.Language
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 # 'Stop' ensures all errors propagate to the outer catch block, which always
@@ -38,10 +39,9 @@ while ($true) {
     if ($null -eq $ln) { break }
     try {
         $req  = $ln | ConvertFrom-Json
-        $errs = [System.Management.Automation.Language.ParseError[]]@()
-        $toks = [System.Management.Automation.Language.Token[]]@()
-        $ast  = [System.Management.Automation.Language.Parser]::ParseInput(
-                    $req.command, [ref]$toks, [ref]$errs)
+        $errs = [ParseError[]]@()
+        $toks = [Token[]]@()
+        $ast  = [Parser]::ParseInput($req.command, [ref]$toks, [ref]$errs)
 
         # Walk top-level statements in source order via $block.Statements.
         # For each statement: record any direct $var = "literal" assignment
@@ -63,20 +63,20 @@ while ($true) {
                 # Record direct-scope $var = "literal" before processing this statement's commands.
                 # AssignmentStatementAst.Right is a CommandExpressionAst (not PipelineAst);
                 # navigate Right.Expression to reach the StringConstantExpressionAst value.
-                if ($stmt -is [System.Management.Automation.Language.AssignmentStatementAst]) {
+                if ($stmt -is [AssignmentStatementAst]) {
                     try {
                         $lhs = $stmt.Left
                         $rhs = $stmt.Right
-                        if ($rhs -is [System.Management.Automation.Language.CommandExpressionAst] -and
-                            $rhs.Expression -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                        if ($rhs -is [CommandExpressionAst] -and
+                            $rhs.Expression -is [StringConstantExpressionAst]) {
                             # Plain assignment: $var = "literal"
-                            if ($lhs -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                            if ($lhs -is [VariableExpressionAst]) {
                                 $vars[$lhs.VariablePath.UserPath] = $rhs.Expression.Value
                             }
                             # Type-cast assignment: [type]$var = "literal"
                             # The LHS is a ConvertExpressionAst wrapping a VariableExpressionAst.
-                            elseif ($lhs -is [System.Management.Automation.Language.ConvertExpressionAst] -and
-                                    $lhs.Child -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                            elseif ($lhs -is [ConvertExpressionAst] -and
+                                    $lhs.Child -is [VariableExpressionAst]) {
                                 $vars[$lhs.Child.VariablePath.UserPath] = $rhs.Expression.Value
                             }
                         }
@@ -86,46 +86,48 @@ while ($true) {
                 # nested scriptblocks (pipelines, foreach bodies, etc.).
                 # Called on $stmt (a StatementAst), not the root ScriptBlockAst,
                 # so FindAll with $true works correctly.
-                $stmt.FindAll({
-                    param($n)
-                    $n -is [System.Management.Automation.Language.CommandAst]
-                }, $true) | ForEach-Object {
+                $stmt.FindAll({ param($n) $n -is [CommandAst] }, $true) | ForEach-Object {
                     $nm = $_.GetCommandName()
                     if ($nm) {  # filters both $null and "" (e.g. & "" arg)
                         $ag = [System.Collections.Generic.List[string]]::new()
                         $_.CommandElements | Select-Object -Skip 1 | ForEach-Object {
                             try {
-                                if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                                if ($_ -is [StringConstantExpressionAst]) {
                                     $ag.Add($_.Value)
-                                } elseif ($_ -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                } elseif ($_ -is [VariableExpressionAst]) {
                                     $k = $_.VariablePath.UserPath
                                     if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                } elseif ($_ -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
-                                    # "$var" expandable string: resolve if it is a single bare variable.
-                                    # NestedExpressions holds the dynamic parts; if there is exactly one
-                                    # and it is a plain variable reference we can substitute its value.
+                                } elseif ($_ -is [ExpandableStringExpressionAst]) {
+                                    # "$var" expandable string: resolve if single bare variable.
                                     $nested = @($_.NestedExpressions)
-                                    if ($nested.Count -eq 1 -and
-                                        $nested[0] -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                    if ($nested.Count -eq 1 -and $nested[0] -is [VariableExpressionAst]) {
                                         $k = $nested[0].VariablePath.UserPath
                                         if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
                                     }
-                                } elseif ($_ -is [System.Management.Automation.Language.CommandParameterAst]) {
+                                } elseif ($_ -is [ArrayExpressionAst] -or $_ -is [ArrayLiteralAst]) {
+                                    # @("a", "b") or "a", "b" — extract literal string elements only.
+                                    # searchNestedScriptBlocks=$false: don't descend into $(cmd).
+                                    $_.FindAll({ param($n) $n -is [StringConstantExpressionAst] }, $false) |
+                                        ForEach-Object { $ag.Add($_.Value) }
+                                } elseif ($_ -is [CommandParameterAst]) {
                                     $ag.Add('-' + $_.ParameterName)
                                     # -Flag:value colon syntax: Argument holds the value expression.
                                     if ($null -ne $_.Argument) {
-                                        if ($_.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                                        if ($_.Argument -is [StringConstantExpressionAst]) {
                                             $ag.Add($_.Argument.Value)
-                                        } elseif ($_.Argument -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                        } elseif ($_.Argument -is [VariableExpressionAst]) {
                                             $k = $_.Argument.VariablePath.UserPath
                                             if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
-                                        } elseif ($_.Argument -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+                                        } elseif ($_.Argument -is [ExpandableStringExpressionAst]) {
                                             $nested = @($_.Argument.NestedExpressions)
-                                            if ($nested.Count -eq 1 -and
-                                                $nested[0] -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                            if ($nested.Count -eq 1 -and $nested[0] -is [VariableExpressionAst]) {
                                                 $k = $nested[0].VariablePath.UserPath
                                                 if ($vars.ContainsKey($k)) { $ag.Add($vars[$k]) }
                                             }
+                                        } elseif ($_.Argument -is [ArrayExpressionAst] -or
+                                                  $_.Argument -is [ArrayLiteralAst]) {
+                                            $_.Argument.FindAll({ param($n) $n -is [StringConstantExpressionAst] }, $false) |
+                                                ForEach-Object { $ag.Add($_.Value) }
                                         }
                                     }
                                 }
@@ -139,9 +141,9 @@ while ($true) {
                         foreach ($r in $_.Redirections) {
                             try {
                                 $f = $r.File
-                                if ($f -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                    # FromType 0 = stdin (<), others are stdout/stderr (>, >>)
-                                    if ($r.FromStream -eq [System.Management.Automation.Language.RedirectionStream]::Input) {
+                                if ($f -is [StringConstantExpressionAst]) {
+                                    # FromStream Input = stdin (<); others = stdout/stderr (>, >>)
+                                    if ($r.FromStream -eq [RedirectionStream]::Input) {
                                         $redirIn.Add($f.Value)
                                     } else {
                                         $redirOut.Add($f.Value)
@@ -150,32 +152,32 @@ while ($true) {
                             } catch { $null = $_ }
                         }
                         # has_subst: true if any *argument* element is not a simple constant
-                        # (variable, subexpression, expandable string, etc.).
+                        # (variable, subexpression, expandable string, array, etc.).
                         # Skip index 0 (the command name itself) — & $cmd -Arg should not
                         # set has_subst=true just because the name element is a variable.
                         # Use foreach+break for early exit; ForEach-Object pipelines do not
                         # support break (it would exit the outer foreach ($stmt) loop instead).
                         $hasSubst = $false
                         foreach ($el in ($_.CommandElements | Select-Object -Skip 1)) {
-                            if ($el -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -and
-                                $el -isnot [System.Management.Automation.Language.CommandParameterAst]) {
+                            if ($el -isnot [StringConstantExpressionAst] -and
+                                $el -isnot [CommandParameterAst]) {
                                 $hasSubst = $true
                                 break
                             }
                             # -Flag:$var or -Flag:"$expandable" — the colon-syntax Argument is complex.
-                            if ($el -is [System.Management.Automation.Language.CommandParameterAst] -and
+                            if ($el -is [CommandParameterAst] -and
                                 $null -ne $el.Argument -and
-                                $el.Argument -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                                $el.Argument -isnot [StringConstantExpressionAst]) {
                                 $hasSubst = $true
                                 break
                             }
                         }
                         $cmds.Add([PSCustomObject]@{
-                            name        = $nm
-                            args        = [string[]]$ag.ToArray()
-                            redir_paths = [string[]]$redirOut.ToArray()
+                            name           = $nm
+                            args           = [string[]]$ag.ToArray()
+                            redir_paths    = [string[]]$redirOut.ToArray()
                             redir_in_paths = [string[]]$redirIn.ToArray()
-                            has_subst   = $hasSubst
+                            has_subst      = $hasSubst
                         })
                     }
                 }

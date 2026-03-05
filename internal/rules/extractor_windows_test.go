@@ -4,10 +4,180 @@ package rules
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// =============================================================================
+// PSScriptAnalyzer lint tests
+// =============================================================================
+
+// psaFinding is a PSScriptAnalyzer diagnostic result.
+type psaFinding struct {
+	RuleName string `json:"RuleName"`
+	Severity string `json:"Severity"`
+	Line     int    `json:"Line"`
+	Column   int    `json:"Column"`
+	Message  string `json:"Message"`
+}
+
+// TestPSScriptAnalyzer lints psBootstrapScript with PSScriptAnalyzer.
+// It is skipped when PSScriptAnalyzer is not installed or pwsh is absent.
+// Run with: go test -run TestPSScriptAnalyzer ./internal/rules/...
+func TestPSScriptAnalyzer(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh/powershell not found")
+	}
+
+	// Check PSScriptAnalyzer availability.
+	check := exec.Command(pwshPath, "-NoProfile", "-NonInteractive", "-Command",
+		"if (Get-Module -ListAvailable PSScriptAnalyzer) { exit 0 } else { exit 1 }")
+	if err := check.Run(); err != nil {
+		t.Skip("PSScriptAnalyzer not installed: run Install-Module PSScriptAnalyzer")
+	}
+
+	// Write the bootstrap script to a temp .ps1 file so PSScriptAnalyzer can
+	// analyze it by path (avoids all -ScriptDefinition quoting issues).
+	// Prepend UTF-8 BOM: PSUseBOMForUnicodeEncodedFile fires on BOM-less UTF-8 files.
+	tmpPath := filepath.Join(t.TempDir(), "crust-psa.ps1")
+	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(psBootstrapScript)...)
+	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// PowerShell script: analyze the temp file and emit JSON.
+	// @() wraps the result so ConvertTo-Json always produces an array.
+	psScript := `
+Import-Module PSScriptAnalyzer
+$results = Invoke-ScriptAnalyzer -Path '` + tmpPath + `' -IncludeDefaultRules
+$out = @($results | Select-Object RuleName,
+    @{N='Severity';E={$_.Severity.ToString()}},
+    Line, Column, Message) | ConvertTo-Json -Compress -Depth 2
+if (-not $out) { $out = '[]' }
+Write-Output $out
+`
+	cmd := exec.Command(pwshPath, "-NoProfile", "-NonInteractive", "-Command", psScript)
+	raw, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		stderr := ""
+		if errors.As(err, &ee) {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("PSScriptAnalyzer invocation failed: %v\nstderr: %s", err, stderr)
+	}
+
+	output := strings.TrimSpace(string(raw))
+	if output == "" || output == "null" {
+		output = "[]"
+	}
+
+	var findings []psaFinding
+	if err := json.Unmarshal([]byte(output), &findings); err != nil {
+		// PSScriptAnalyzer returns a single object (not array) for exactly one finding.
+		var single psaFinding
+		if err2 := json.Unmarshal([]byte(output), &single); err2 != nil {
+			t.Fatalf("parse PSScriptAnalyzer output: %v\nraw: %s", err, output)
+		}
+		findings = []psaFinding{single}
+	}
+
+	for _, f := range findings {
+		t.Errorf("PSScriptAnalyzer [%s/%s] line %d:%d — %s",
+			f.Severity, f.RuleName, f.Line, f.Column, f.Message)
+	}
+	if len(findings) == 0 {
+		t.Logf("PSScriptAnalyzer: no findings (all 70 default rules passed)")
+	}
+}
+
+// TestPSScriptAnalyzerCodeStyle runs PSScriptAnalyzer with non-default style
+// rules that complement the 70 default rules in TestPSScriptAnalyzer.
+//
+// PSAvoidSemicolonsAsLineTerminators: semicolons as statement separators harm
+// readability and are a common obfuscation technique in shell scripts.
+//
+// PSAvoidUsingDoubleQuotesForConstantString: unnecessary double quotes can
+// silently expand $variables; making interpolation intent explicit prevents
+// accidental expansion in future edits.
+//
+// Skipped when PSScriptAnalyzer is absent or the rules don't exist (< v1.22).
+func TestPSScriptAnalyzerCodeStyle(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh/powershell not found")
+	}
+	check := exec.Command(pwshPath, "-NoProfile", "-NonInteractive", "-Command",
+		"if (Get-Module -ListAvailable PSScriptAnalyzer) { exit 0 } else { exit 1 }")
+	if err := check.Run(); err != nil {
+		t.Skip("PSScriptAnalyzer not installed: run Install-Module PSScriptAnalyzer")
+	}
+	// Skip if the specific rules are not available in this PSScriptAnalyzer version.
+	checkRules := exec.Command(pwshPath, "-NoProfile", "-NonInteractive", "-Command",
+		"if (Get-ScriptAnalyzerRule -RuleName PSAvoidSemicolonsAsLineTerminators) { exit 0 } else { exit 1 }")
+	if err := checkRules.Run(); err != nil {
+		t.Skip("PSAvoidSemicolonsAsLineTerminators not available in this PSScriptAnalyzer version")
+	}
+
+	tmpPath := filepath.Join(t.TempDir(), "crust-psa-style.ps1")
+	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(psBootstrapScript)...)
+	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const styleRules = "PSAvoidSemicolonsAsLineTerminators,PSAvoidUsingDoubleQuotesForConstantString"
+	psScript := `
+Import-Module PSScriptAnalyzer
+$results = Invoke-ScriptAnalyzer -Path '` + tmpPath + `' -RuleName ` + styleRules + `
+$out = @($results | Select-Object RuleName,
+    @{N='Severity';E={$_.Severity.ToString()}},
+    Line, Column, Message) | ConvertTo-Json -Compress -Depth 2
+if (-not $out) { $out = '[]' }
+Write-Output $out
+`
+	cmd := exec.Command(pwshPath, "-NoProfile", "-NonInteractive", "-Command", psScript)
+	raw, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		stderr := ""
+		if errors.As(err, &ee) {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("PSScriptAnalyzer invocation failed: %v\nstderr: %s", err, stderr)
+	}
+
+	output := strings.TrimSpace(string(raw))
+	if output == "" || output == "null" {
+		output = "[]"
+	}
+
+	var findings []psaFinding
+	if err := json.Unmarshal([]byte(output), &findings); err != nil {
+		var single psaFinding
+		if err2 := json.Unmarshal([]byte(output), &single); err2 != nil {
+			t.Fatalf("parse PSScriptAnalyzer output: %v\nraw: %s", err, output)
+		}
+		findings = []psaFinding{single}
+	}
+
+	for _, f := range findings {
+		t.Errorf("PSScriptAnalyzer [%s/%s] line %d:%d — %s",
+			f.Severity, f.RuleName, f.Line, f.Column, f.Message)
+	}
+	if len(findings) == 0 {
+		t.Logf("PSScriptAnalyzer code style: no findings")
+	}
+}
+
+// =============================================================================
+// Unit tests (TestPSWorker_*)
+// =============================================================================
 
 // TestPSWorker_BasicExtraction verifies that the pwsh worker extracts paths
 // and command names from PowerShell commands that the bash parser handles poorly.
@@ -342,7 +512,122 @@ func TestPSWorker_HasSubstColonSyntax(t *testing.T) {
 	}
 }
 
+// TestPSWorker_ArrayLiteralArgs verifies that array literal arguments
+// @("a", "b") and comma-separated "a", "b" have their string elements extracted.
+func TestPSWorker_ArrayLiteralArgs(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name     string
+		cmd      string
+		wantArgs []string
+	}{
+		{
+			name:     "array expression @(...)",
+			cmd:      `Get-Content @("/etc/passwd", "/etc/hosts")`,
+			wantArgs: []string{"/etc/passwd", "/etc/hosts"},
+		},
+		{
+			name:     "comma-separated array literal",
+			cmd:      `Get-Content "/etc/passwd", "/etc/hosts"`,
+			wantArgs: []string{"/etc/passwd", "/etc/hosts"},
+		},
+		{
+			name:     "array with mixed literal and subexpr — literals extracted",
+			cmd:      `Get-Content @("/etc/passwd", $(Get-Item "/ignored"))`,
+			wantArgs: []string{"/etc/passwd"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(resp.Commands) == 0 {
+				t.Fatal("expected at least one command")
+			}
+			var cmd parsedCommand
+			for _, c := range resp.Commands {
+				if c.Name == "Get-Content" {
+					cmd = c
+					break
+				}
+			}
+			if cmd.Name == "" {
+				t.Fatalf("Get-Content not found in %+v", resp.Commands)
+			}
+			for _, want := range tt.wantArgs {
+				if !slices.Contains(cmd.Args, want) {
+					t.Errorf("arg %q not found in %v", want, cmd.Args)
+				}
+			}
+		})
+	}
+}
+
+// TestPSWorker_ScopePrefixVar verifies that scope-qualified variables
+// ($global:x, $script:x, $local:x) are resolved via their unqualified name.
+func TestPSWorker_ScopePrefixVar(t *testing.T) {
+	pwshPath, ok := FindPwsh()
+	if !ok {
+		t.Skip("pwsh.exe / powershell.exe not found")
+	}
+	w, err := newPwshWorker(pwshPath)
+	if err != nil {
+		t.Fatalf("newPwshWorker: %v", err)
+	}
+	defer w.stop()
+
+	tests := []struct {
+		name    string
+		cmd     string
+		wantArg string
+	}{
+		{
+			name:    "global scope prefix on assignment and use",
+			cmd:     `$global:path = "/etc/passwd"; Get-Content $global:path`,
+			wantArg: "/etc/passwd",
+		},
+		{
+			name:    "script scope prefix",
+			cmd:     `$script:path = "/etc/shadow"; Get-Content $script:path`,
+			wantArg: "/etc/shadow",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := w.parse(tt.cmd)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var found bool
+			for _, c := range resp.Commands {
+				if c.Name == "Get-Content" && slices.Contains(c.Args, tt.wantArg) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected Get-Content with arg %q in %+v", tt.wantArg, resp.Commands)
+			}
+		})
+	}
+}
+
 // =============================================================================
+// Fuzz tests (FuzzPSWorker_*, FuzzExtractor_*)
+// =============================================================================
+
 // FuzzPSWorker_NoCrash: Can fuzzed PowerShell command strings crash or hang
 // the pwsh worker subprocess? Tests worker robustness and auto-restart.
 //
@@ -351,9 +636,6 @@ func TestPSWorker_HasSubstColonSyntax(t *testing.T) {
 //  2. After a worker crash (psErr != nil), a subsequent parse() call must
 //     restart the worker and return a valid response.
 //  3. Successful responses must have structurally valid commands (name/args).
-//
-// =============================================================================
-
 func FuzzPSWorker_NoCrash(f *testing.F) {
 	pwshPath, ok := FindPwsh()
 	if !ok {
@@ -429,7 +711,6 @@ func FuzzPSWorker_NoCrash(f *testing.F) {
 	})
 }
 
-// =============================================================================
 // FuzzExtractor_PSCommand: Can fuzzed PS-looking commands cause the full
 // extractor (with pwsh worker) to panic or produce inconsistent results?
 //
@@ -437,9 +718,6 @@ func FuzzPSWorker_NoCrash(f *testing.F) {
 //  1. Extract must never panic.
 //  2. All returned paths must be non-empty strings.
 //  3. Evasive commands must have a non-empty EvasiveReason.
-//
-// =============================================================================
-
 func FuzzExtractor_PSCommand(f *testing.F) {
 	pwshPath, ok := FindPwsh()
 	if !ok {

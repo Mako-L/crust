@@ -55,6 +55,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
+        # go install tool pins are not updated by Dependabot — bump manually
         run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Verify PIE binary
@@ -116,6 +117,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
+        # go install tool pins are not updated by Dependabot — bump manually
         run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Build
@@ -249,6 +251,7 @@ jobs:
           npm install -g @modelcontextprotocol/server-everything
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
+        # go install tool pins are not updated by Dependabot — bump manually
         run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: MCP E2E tests (stdio + HTTP)

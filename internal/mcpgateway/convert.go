@@ -84,38 +84,36 @@ func MCPMethodToToolCall(method string, params json.RawMessage) (*rules.ToolCall
 			return nil, fmt.Errorf("empty URI in %s", method)
 		}
 
+		// Detect Windows absolute paths BEFORE url.Parse, which mangles them:
+		// url.Parse("C:\Users\...") interprets "C:" as the URL scheme, losing
+		// the drive letter from Path (golang.org/issue/13276). Check the raw
+		// URI with pathutil before parsing so agents on any platform can
+		// reference Windows-style paths. Also normalizes backslashes to forward
+		// slashes at this system boundary for a consistent pipeline.
+		if pathutil.IsWindowsAbsPath(p.URI) {
+			path := pathutil.ToSlash(p.URI)
+			args, err := json.Marshal(map[string]string{"path": path})
+			if err != nil {
+				return nil, fmt.Errorf("marshal error: %w", err)
+			}
+			return &rules.ToolCall{Name: "read_file", Arguments: args}, nil
+		}
+
 		parsed, err := url.Parse(p.URI)
 		if err != nil {
 			return nil, fmt.Errorf("invalid URI in %s: %w", method, err)
 		}
 
-		// Detect filesystem paths vs remote URLs.
-		// url.Parse("C:\Users\...") yields Scheme="c" (single char), which would
-		// fall through to the remote-URL branch and bypass filesystem rules.
-		// Valid URL schemes are always ≥2 chars (RFC 3986), so a single-letter
-		// scheme is always a Windows drive letter — but only guard on Windows
-		// environments; on Linux/macOS single-letter schemes are not drive roots.
+		// Detect Unix filesystem paths and file:// URIs.
 		isFilePath := parsed.Scheme == "file" || parsed.Scheme == ""
-		if !isFilePath && rules.ShellEnvironment().IsWindows() &&
-			len(parsed.Scheme) == 1 && pathutil.IsDriverLetter(parsed.Scheme[0]) {
-			isFilePath = true
-		}
-
 		if isFilePath {
-			var path string
-			if len(parsed.Scheme) == 1 {
-				// Drive-letter URI: url.Parse splits "C:" into Scheme,
-				// losing it from Path. Use raw URI to preserve the full path.
+			path := parsed.Path
+			if path == "" {
 				path = p.URI
-			} else {
-				path = parsed.Path
-				if path == "" {
-					path = p.URI
-				}
-				// file:///C:/Users/... → parsed.Path="/C:/Users/..."
-				// Strip leading "/" before a Windows drive letter.
-				path = pathutil.StripFileURIDriveLetter(path)
 			}
+			// file:///C:/Users/... → parsed.Path="/C:/Users/..."
+			// Strip leading "/" before a Windows drive letter.
+			path = pathutil.StripFileURIDriveLetter(path)
 			args, err := json.Marshal(map[string]string{"path": path})
 			if err != nil {
 				return nil, fmt.Errorf("marshal error: %w", err)

@@ -150,6 +150,11 @@ func CleanPath(p string) string {
 			vol = "" // Not a drive letter — treat as regular path
 		}
 		rest := p[len(vol):]
+		// Bare drive root ("A:" with no path component): return as-is.
+		// path.Clean("") = "." which would produce "A:." — incorrect.
+		if rest == "" {
+			return vol
+		}
 		cleaned := path.Clean(rest)
 		// Ensure absolute paths stay absolute
 		if strings.HasPrefix(rest, "/") && !strings.HasPrefix(cleaned, "/") {

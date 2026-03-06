@@ -346,11 +346,14 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	// On Windows, only accept drive letter paths that are absolute
-	// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
-	// a root slash and can't be resolved without knowing the current
-	// directory on that drive — treat them as relative.
-	if pathutil.IsDrivePath(path) && len(path) >= 3 && path[2] == '/' {
+	// On Windows environments, accept drive-letter paths that are absolute.
+	// "C:/" and "C:" (bare drive root — what CleanPath produces from "C:/")
+	// are both absolute. Drive-relative paths like "A:../../foo" have a
+	// non-slash third character and can't be resolved without knowing the
+	// current directory on that drive — treat those as relative.
+	// On non-Windows environments (Linux, macOS), "A:/" is just a directory
+	// named "A:" — not a drive root — so fall through to relative handling.
+	if ShellEnvironment().IsWindows() && pathutil.IsDrivePath(path) && (len(path) == 2 || path[2] == '/') {
 		return path
 	}
 

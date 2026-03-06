@@ -93,9 +93,11 @@ func MCPMethodToToolCall(method string, params json.RawMessage) (*rules.ToolCall
 		// url.Parse("C:\Users\...") yields Scheme="c" (single char), which would
 		// fall through to the remote-URL branch and bypass filesystem rules.
 		// Valid URL schemes are always ≥2 chars (RFC 3986), so a single-letter
-		// scheme is always a Windows drive letter.
+		// scheme is always a Windows drive letter — but only guard on Windows
+		// environments; on Linux/macOS single-letter schemes are not drive roots.
 		isFilePath := parsed.Scheme == "file" || parsed.Scheme == ""
-		if !isFilePath && len(parsed.Scheme) == 1 && pathutil.IsDriverLetter(parsed.Scheme[0]) {
+		if !isFilePath && rules.ShellEnvironment().IsWindows() &&
+			len(parsed.Scheme) == 1 && pathutil.IsDriverLetter(parsed.Scheme[0]) {
 			isFilePath = true
 		}
 

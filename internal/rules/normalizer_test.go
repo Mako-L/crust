@@ -249,6 +249,21 @@ func TestNormalizer_Normalize(t *testing.T) {
 	}
 }
 
+// TestNormalizer_Idempotent_DriveRoot is a regression test for
+// "A:/" → CleanPath → "A:" which was then mis-handled as a relative path,
+// producing a non-idempotent result. Both inputs must normalize to the same
+// value regardless of shell environment.
+func TestNormalizer_Idempotent_DriveRoot(t *testing.T) {
+	n := NewNormalizerWithEnv("/home/user", "/home/user/project", map[string]string{})
+	for _, input := range []string{"A:/", "A:"} {
+		first := n.Normalize(input)
+		second := n.Normalize(first)
+		if first != second {
+			t.Errorf("Normalize is NOT idempotent: input=%q first=%q second=%q", input, first, second)
+		}
+	}
+}
+
 func TestNormalizer_NormalizeAll(t *testing.T) {
 	homeDir := "/home/testuser"
 	workDir := "/home/testuser/project"

@@ -2051,7 +2051,10 @@ func FuzzPipeBypass(f *testing.F) {
 			return true
 		}
 		// Match **/.env and **/.env.* but not .envrc, .env0, etc.
-		if strings.HasSuffix(p, "/.env") || (strings.Contains(p, "/.env.") && !strings.HasSuffix(p, ".example")) {
+		// The glob **/.env.* does NOT cross directory boundaries, so
+		// /.env./subdir is NOT a match — .env. must be in the basename.
+		base := path.Base(p)
+		if base == ".env" || (strings.HasPrefix(base, ".env.") && base != ".env.example") {
 			return true
 		}
 		if p == criticalEnvPrefix {
@@ -2077,7 +2080,10 @@ func FuzzPipeBypass(f *testing.F) {
 		// This catches cases where extraction works but matching fails.
 		// ---------------------------------------------------------------
 		info := NewExtractor().Extract("Bash", json.RawMessage(args))
-		normalizedPaths := normalizer.NormalizeAllWithSymlinks(info.Paths)
+		// Use PreparePaths (which includes filterShellGlobs) to match
+		// the engine's step 8 pipeline, then resolve symlinks (step 9).
+		preparedPaths := normalizer.PreparePaths(info.Paths)
+		normalizedPaths := normalizer.resolveSymlinks(preparedPaths)
 
 		for _, np := range normalizedPaths {
 			if isCriticalPath(np) && !result.Matched {

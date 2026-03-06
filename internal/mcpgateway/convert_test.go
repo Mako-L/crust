@@ -56,7 +56,7 @@ func TestMcpMethodToToolCall(t *testing.T) {
 			"resources_read_windows_backslash",
 			"resources/read",
 			`{"uri":"C:\\Users\\me\\.ssh\\id_rsa"}`,
-			"read_file", "path", "C:\\Users\\me\\.ssh\\id_rsa",
+			"read_file", "path", "C:/Users/me/.ssh/id_rsa",
 		},
 		{
 			"resources_read_windows_forward_slash",

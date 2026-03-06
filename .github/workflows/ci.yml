@@ -46,6 +46,7 @@ jobs:
     name: Security Checks
     needs: [lint-go]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -54,7 +55,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@latest
+        # go install tool pins are not updated by Dependabot — bump manually
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Verify PIE binary
         run: |
@@ -72,8 +74,7 @@ jobs:
           go test ./internal/rules/ -fuzz=FuzzPipeBypass -fuzztime=30s -short
           go test ./internal/rules/ -fuzz=FuzzConfusableBypass -fuzztime=30s -short
 
-      - name: Fuzz tests (full suite, 10s each — main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Fuzz tests (full suite, 10s each)
         run: |
           go test ./internal/rules/ -fuzz=FuzzNormalizerBypass -fuzztime=10s -short
           go test ./internal/rules/ -fuzz=FuzzParseShellCommands -fuzztime=10s -short
@@ -116,7 +117,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@latest
+        # go install tool pins are not updated by Dependabot — bump manually
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Build
         run: go build ./...
@@ -144,44 +146,65 @@ jobs:
           go test ./internal/rules/ -fuzz=FuzzExtractor_PSCommand -fuzztime=30s -short
 
 
-  # macOS and FreeBSD full tests run only on main to reduce CI costs (macOS is 10x billing).
-  # The jobs always complete (SUCCESS) so they can be listed as required status checks;
+  # Platform-specific tests run only on main to reduce CI costs.
+  # macOS runners are 10x billing; MSYS2 adds a second windows-latest runner.
+  # Jobs always complete (SUCCESS) so they can be listed as required status checks;
   # the expensive steps are skipped on non-main branches.
   test-expensive:
-    name: Go Test (${{ matrix.os }})
+    name: Go Test (${{ matrix.name }})
     needs: [lint-go]
     runs-on: ${{ github.ref == 'refs/heads/main' && matrix.os || 'ubuntu-latest' }}
     strategy:
       matrix:
-        os: [macos-latest]
+        include:
+          - os: macos-latest
+            name: macOS
+            msys2: false
+          - os: windows-latest
+            name: Windows MSYS2
+            msys2: true
     steps:
       - name: Skip on non-main branches
         if: github.ref != 'refs/heads/main'
-        run: echo "macOS tests run on main only — skipping to reduce CI costs"
+        run: echo "Platform tests run on main only — skipping to reduce CI costs"
 
       - uses: actions/checkout@v4
         if: github.ref == 'refs/heads/main'
 
+      # setup-go must run before msys2/setup-msys2 so the toolchain is in PATH
+      # when the MSYS2 shell inherits it via path-type: inherit.
       - uses: actions/setup-go@v5
         if: github.ref == 'refs/heads/main'
         with:
           go-version-file: go.mod
 
+      - uses: msys2/setup-msys2@v2
+        if: github.ref == 'refs/heads/main' && matrix.msys2
+        with:
+          msystem: MINGW64
+          update: false
+          path-type: inherit  # inherit Windows PATH so the Go toolchain is visible
+
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
         if: github.ref == 'refs/heads/main'
-        run: go install github.com/zricethezav/gitleaks/v8@latest
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Build
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !matrix.msys2
         run: go build ./...
 
       - name: Build (notui)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !matrix.msys2
         run: go build -tags notui ./...
 
       - name: Unit tests (with race detector)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !matrix.msys2
         run: go test -race -short ./...
+
+      - name: Unit tests (MSYS2 — MSYSTEM set by msys2/setup-msys2)
+        if: github.ref == 'refs/heads/main' && matrix.msys2
+        shell: msys2 {0}
+        run: go test ./internal/rules/... ./internal/pathutil/... -short -count=1 -timeout 120s
 
   test-freebsd:
     name: Go Test (FreeBSD)
@@ -228,7 +251,8 @@ jobs:
           npm install -g @modelcontextprotocol/server-everything
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@latest
+        # go install tool pins are not updated by Dependabot — bump manually
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: MCP E2E tests (stdio + HTTP)
         run: go test -race ./internal/mcpgateway/... -v -run E2E -timeout 180s

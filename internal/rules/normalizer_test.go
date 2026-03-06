@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"testing"
 
 	"github.com/BakeLens/crust/internal/pathutil"
@@ -248,6 +249,21 @@ func TestNormalizer_Normalize(t *testing.T) {
 	}
 }
 
+// TestNormalizer_Idempotent_DriveRoot is a regression test for
+// "A:/" → CleanPath → "A:" which was then mis-handled as a relative path,
+// producing a non-idempotent result. Both inputs must normalize to the same
+// value regardless of shell environment.
+func TestNormalizer_Idempotent_DriveRoot(t *testing.T) {
+	n := NewNormalizerWithEnv("/home/user", "/home/user/project", map[string]string{})
+	for _, input := range []string{"A:/", "A:"} {
+		first := n.Normalize(input)
+		second := n.Normalize(first)
+		if first != second {
+			t.Errorf("Normalize is NOT idempotent: input=%q first=%q second=%q", input, first, second)
+		}
+	}
+}
+
 func TestNormalizer_NormalizeAll(t *testing.T) {
 	homeDir := "/home/testuser"
 	workDir := "/home/testuser/project"
@@ -334,6 +350,11 @@ func TestStripADS(t *testing.T) {
 		{name: "lowercase drive letter", input: "c:/foo:bar", expected: "c:/foo"},
 		{name: "drive letter only", input: "C:", expected: "C:"},
 		{name: "drive letter with just stream", input: "C:/file:stream/dir", expected: "C:/file/dir"},
+
+		// MSYS2-style /X:/ paths (drive letter at segment index 1)
+		{name: "msys2 style drive preserved", input: "/c:/Users/file.txt::$DATA", expected: "/c:/Users/file.txt"},
+		{name: "msys2 style no ADS", input: "/c:/Users/file.txt", expected: "/c:/Users/file.txt"},
+		{name: "msys2 style with stream", input: "/c:/file:stream/dir", expected: "/c:/file/dir"},
 	}
 
 	for _, tt := range tests {
@@ -366,9 +387,17 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "single char var",
-			input:    "$A/foo",
-			expected: "/a/foo",
+			name:  "single char var",
+			input: "$A/foo",
+			// On MSYS2, /a/ is the MSYS2 mount point for drive A:, so
+			// ExpandMSYS2Path converts it to A:/foo. DefaultFS().Lower
+			// applies the actual filesystem's case folding.
+			expected: func() string {
+				if ShellEnvironment() == EnvMSYS2 {
+					return pathutil.DefaultFS().Lower("A:/foo")
+				}
+				return "/a/foo"
+			}(),
 		},
 		{
 			name:     "var with numbers",
@@ -406,15 +435,24 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 			expected: "/foo", // empty var results in /foo which is absolute
 		},
 		{
-			name:     "adjacent vars",
-			input:    "$A$AB",
-			expected: "/a/ab",
+			name:  "adjacent vars",
+			input: "$A$AB",
+			// On MSYS2, /a/ is the MSYS2 mount point for drive A:, so
+			// ExpandMSYS2Path converts /a/ab → A:/ab. DefaultFS().Lower
+			// applies the actual filesystem's case folding.
+			expected: func() string {
+				if ShellEnvironment() == EnvMSYS2 {
+					return pathutil.DefaultFS().Lower("A:/ab")
+				}
+				return "/a/ab"
+			}(),
 		},
 		{
 			name:  "braced var allows adjacent text",
 			input: "${A}B",
-			// On case-insensitive filesystems (macOS APFS), the normalizer
-			// lowercases the entire path, so "/aB" becomes "/ab".
+			// DefaultFS().Lower applies the filesystem's case folding:
+			// case-insensitive (macOS APFS, Windows NTFS) → "/ab",
+			// case-sensitive (Linux ext4) → "/aB".
 			expected: pathutil.DefaultFS().Lower("/aB"),
 		},
 	}
@@ -424,6 +462,36 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 			result := n.Normalize(tt.input)
 			if result != tt.expected {
 				t.Errorf("Normalize(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestMSYS2_NormalizerEndToEnd verifies that MSYS2 mount-point paths are
+// expanded to Windows drive paths through the full normalizer pipeline.
+// Skips when MSYSTEM is not set.
+func TestMSYS2_NormalizerEndToEnd(t *testing.T) {
+	if os.Getenv("MSYSTEM") == "" {
+		t.Skip("MSYSTEM not set — not running under MSYS2")
+	}
+	n := NewNormalizerWithEnv("/home/user", "/home/user/project", map[string]string{
+		"HOME": "/home/user",
+	})
+	tests := []struct{ input, want string }{
+		// MSYS2 mount paths → Windows drive paths (then NTFS case-folded)
+		{"/c/Users/user/.env", pathutil.DefaultFS().Lower("C:/Users/user/.env")},
+		{"/d/projects/secret", pathutil.DefaultFS().Lower("D:/projects/secret")},
+		// Already-Windows paths pass through (modulo case)
+		{"C:/Users/user/.env", pathutil.DefaultFS().Lower("C:/Users/user/.env")},
+		// Non-drive paths are not expanded
+		{"/etc/passwd", "/etc/passwd"},
+		{"/usr/local/bin/secret", "/usr/local/bin/secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := n.Normalize(tt.input)
+			if got != tt.want {
+				t.Errorf("Normalize(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

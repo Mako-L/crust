@@ -173,6 +173,16 @@ func (n *Normalizer) Normalize(path string) string {
 		path = pathutil.CleanPath(trimmed)
 	}
 
+	// Step 7.1: On MSYS2/Git Bash, Windows drives are mounted as /c/, /d/, etc.
+	// Runs AFTER CleanPath so that redundant slashes are collapsed first:
+	// "//A" → CleanPath → "/A" → ExpandMSYS2Path → "A:/" (idempotent).
+	// If run before CleanPath, "//A" would pass through unexpanded (s[1]=='/'
+	// not a letter), then clean to "/A", then expand on the second normalize
+	// pass — breaking idempotency.
+	if ShellEnvironment() == EnvMSYS2 {
+		path = pathutil.ExpandMSYS2Path(path)
+	}
+
 	// SECURITY: Lowercase paths on case-insensitive filesystems (NTFS, default
 	// APFS/HFS+) so pattern matching cannot be bypassed by changing case.
 	// Detected via direct kernel syscalls — cannot be fooled.
@@ -340,11 +350,14 @@ func (n *Normalizer) makeAbsolute(path string) string {
 		return path
 	}
 
-	// On Windows, only accept drive letter paths that are absolute
-	// (e.g., "C:/foo"). Drive-relative paths like "A:../../foo" lack
-	// a root slash and can't be resolved without knowing the current
-	// directory on that drive — treat them as relative.
-	if pathutil.IsDrivePath(path) && len(path) >= 3 && path[2] == '/' {
+	// On Windows environments, accept drive-letter paths that are absolute.
+	// "C:/" and "C:" (bare drive root — what CleanPath produces from "C:/")
+	// are both absolute. Drive-relative paths like "A:../../foo" have a
+	// non-slash third character and can't be resolved without knowing the
+	// current directory on that drive — treat those as relative.
+	// On non-Windows environments (Linux, macOS), "A:/" is just a directory
+	// named "A:" — not a drive root — so fall through to relative handling.
+	if ShellEnvironment().IsWindows() && pathutil.IsDrivePath(path) && (len(path) == 2 || path[2] == '/') {
 		return path
 	}
 
@@ -577,8 +590,11 @@ func stripADS(p string) string {
 	// Process each path segment, stripping everything after the first colon.
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
-		// Skip drive letter segment (e.g., "C:") when it's a path prefix.
-		if i == 0 && len(part) == 2 && part[1] == ':' && pathutil.IsDriverLetter(part[0]) {
+		// Skip bare drive-letter segments (e.g., "C:" in "C:/..." or "/C:/...").
+		// They appear at index 0 for Windows paths and index 1 for MSYS2-style
+		// paths that begin with "/" (e.g., "/c:/..." where parts[0]=="").
+		isDriveSeg := len(part) == 2 && part[1] == ':' && pathutil.IsDriverLetter(part[0])
+		if isDriveSeg && (i == 0 || (i == 1 && parts[0] == "")) {
 			continue
 		}
 		if before, _, ok := strings.Cut(part, ":"); ok {

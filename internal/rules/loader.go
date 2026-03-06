@@ -35,13 +35,13 @@ func NewLoader(userDir string) *Loader {
 	}
 }
 
-// DefaultUserRulesDir returns the default user rules directory
+// DefaultUserRulesDir returns the default user rules directory with forward slashes.
 func DefaultUserRulesDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ".crust/rules.d"
 	}
-	return filepath.Join(home, ".crust", "rules.d")
+	return pathutil.ToSlash(filepath.Join(home, ".crust", "rules.d"))
 }
 
 // LoadBuiltin loads all embedded builtin path-based rules
@@ -287,16 +287,19 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 	// Construct the full path
 	fullPath := filepath.Join(l.userDir, safeFilename)
 
-	// Get absolute paths
-	absPath, err := filepath.Abs(fullPath)
+	// Get absolute paths, normalized to forward slashes so HasPathPrefix
+	// comparisons are consistent regardless of platform-native separator.
+	absPathRaw, err := filepath.Abs(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path: %w", err)
 	}
+	absPath := pathutil.ToSlash(absPathRaw)
 
-	absUserDir, err := filepath.Abs(l.userDir)
+	absUserDirRaw, err := filepath.Abs(l.userDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve user dir: %w", err)
 	}
+	absUserDir := pathutil.ToSlash(absUserDirRaw)
 
 	// Ensure the path is within the user directory.
 	// HasPathPrefix handles trailing separator to prevent prefix issues
@@ -309,11 +312,11 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 	if _, err := os.Lstat(fullPath); err == nil {
 		realPath, err := filepath.EvalSymlinks(fullPath)
 		if err == nil {
-			absRealPath, err := filepath.Abs(realPath)
+			absRealPathRaw, err := filepath.Abs(realPath)
 			if err != nil {
 				return "", fmt.Errorf("failed to resolve symlink: %w", err)
 			}
-			if !pathutil.HasPathPrefix(absRealPath, absUserDir) {
+			if !pathutil.HasPathPrefix(pathutil.ToSlash(absRealPathRaw), absUserDir) {
 				return "", errors.New("symlink points outside rules directory")
 			}
 		}

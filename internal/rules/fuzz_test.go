@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BakeLens/crust/internal/pathutil"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -58,7 +59,12 @@ func FuzzNormalizerBypass(f *testing.F) {
 		}
 
 		// INVARIANT 3: Non-empty absolute input must produce absolute output.
-		if strings.HasPrefix(path, "/") && path != "" && result != "" && !strings.HasPrefix(result, "/") {
+		// On MSYS2, /X mount-point paths expand to Windows drive paths (e.g.
+		// /A → a:/) which are also absolute — accept both forms.
+		isAbsResult := strings.HasPrefix(result, "/") ||
+			(ShellEnvironment().IsWindows() && pathutil.IsDrivePath(result) &&
+				(len(result) == 2 || result[2] == '/'))
+		if strings.HasPrefix(path, "/") && path != "" && result != "" && !isAbsResult {
 			t.Errorf("absolute input produced non-absolute output: input=%q result=%q", path, result)
 		}
 

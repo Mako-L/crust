@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"runtime"
 	"testing"
 )
@@ -105,5 +106,16 @@ func TestDetectShellEnv_CurrentProcess(t *testing.T) {
 		if got.IsWindows() {
 			t.Errorf("GOOS=%s but ShellEnvironment()=%v reports Windows", runtime.GOOS, got)
 		}
+	}
+}
+
+func TestDetectShellEnv_MSYS2(t *testing.T) {
+	if os.Getenv("MSYSTEM") == "" {
+		t.Skip("MSYSTEM not set — not running under MSYS2")
+	}
+	got := ShellEnvironment()
+	if got != EnvMSYS2 {
+		t.Errorf("MSYSTEM=%q but ShellEnvironment()=%v, want EnvMSYS2",
+			os.Getenv("MSYSTEM"), got)
 	}
 }

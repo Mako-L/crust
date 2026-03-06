@@ -2,6 +2,7 @@ package rules
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"runtime"
 	"slices"
@@ -4611,3 +4612,37 @@ func TestWindowsBashEnv_PathExtraction(t *testing.T) {
 		})
 	}
 }
+
+// TestMSYS2_PathExtractionEndToEnd verifies that MSYS2 mount-point paths
+// (/c/Users/...) are captured by the extractor in their raw form so the
+// normalizer can expand them. Skips when MSYSTEM is not set.
+func TestMSYS2_PathExtractionEndToEnd(t *testing.T) {
+	if os.Getenv("MSYSTEM") == "" {
+		t.Skip("MSYSTEM not set — not running under MSYS2")
+	}
+	// The extractor returns raw (unexpanded) paths; expansion happens in the
+	// normalizer (see TestMSYS2_NormalizerEndToEnd in normalizer_test.go).
+	ext := NewExtractor()
+	tests := []struct {
+		command  string
+		wantPath string
+	}{
+		// MSYS2 /c/ mount paths are captured as-is for the normalizer to expand
+		{"cat /c/Users/user/.env", "/c/Users/user/.env"},
+		{"cat /c/Users/user/.ssh/id_rsa", "/c/Users/user/.ssh/id_rsa"},
+		// Windows-style paths are also captured as-is
+		{"cat C:/Users/user/.env", "C:/Users/user/.env"},
+		// Non-drive paths
+		{"cat /etc/passwd", "/etc/passwd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": tt.command})
+			info := ext.Extract("Bash", json.RawMessage(args))
+			if !slices.Contains(info.Paths, tt.wantPath) {
+				t.Errorf("Extract(%q).Paths = %v, want %q", tt.command, info.Paths, tt.wantPath)
+			}
+		})
+	}
+}
+

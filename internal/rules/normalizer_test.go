@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"testing"
 
 	"github.com/BakeLens/crust/internal/pathutil"
@@ -446,6 +447,36 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 			result := n.Normalize(tt.input)
 			if result != tt.expected {
 				t.Errorf("Normalize(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestMSYS2_NormalizerEndToEnd verifies that MSYS2 mount-point paths are
+// expanded to Windows drive paths through the full normalizer pipeline.
+// Skips when MSYSTEM is not set.
+func TestMSYS2_NormalizerEndToEnd(t *testing.T) {
+	if os.Getenv("MSYSTEM") == "" {
+		t.Skip("MSYSTEM not set — not running under MSYS2")
+	}
+	n := NewNormalizerWithEnv("/home/user", "/home/user/project", map[string]string{
+		"HOME": "/home/user",
+	})
+	tests := []struct{ input, want string }{
+		// MSYS2 mount paths → Windows drive paths (then NTFS case-folded)
+		{"/c/Users/user/.env", pathutil.DefaultFS().Lower("C:/Users/user/.env")},
+		{"/d/projects/secret", pathutil.DefaultFS().Lower("D:/projects/secret")},
+		// Already-Windows paths pass through (modulo case)
+		{"C:/Users/user/.env", pathutil.DefaultFS().Lower("C:/Users/user/.env")},
+		// Non-drive paths are not expanded
+		{"/etc/passwd", "/etc/passwd"},
+		{"/usr/local/bin/secret", "/usr/local/bin/secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := n.Normalize(tt.input)
+			if got != tt.want {
+				t.Errorf("Normalize(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

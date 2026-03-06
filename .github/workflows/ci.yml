@@ -55,7 +55,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.0
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Verify PIE binary
         run: |
@@ -116,7 +116,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.0
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Build
         run: go build ./...
@@ -185,7 +185,7 @@ jobs:
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
         if: github.ref == 'refs/heads/main'
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.0
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: Build
         if: github.ref == 'refs/heads/main' && !matrix.msys2
@@ -249,7 +249,7 @@ jobs:
           npm install -g @modelcontextprotocol/server-everything
 
       - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.0
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
       - name: MCP E2E tests (stdio + HTTP)
         run: go test -race ./internal/mcpgateway/... -v -run E2E -timeout 180s

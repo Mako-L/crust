@@ -35,7 +35,7 @@ func NewWorkerPool(pwshPath string, size int) (*WorkerPool, error) {
 	}
 
 	// Warm up all workers concurrently: each sends a trivial parse so the
-	// pwsh process initialises its bootstrap script and JIT-compiles the hot
+	// pwsh process initializes its bootstrap script and JIT-compiles the hot
 	// path before any real test or production parse arrives. Without warmup,
 	// workers that lose the CPU lottery during parallel startup can still be
 	// cold when first acquired, triggering the 30 s parseTimeout on slow CI

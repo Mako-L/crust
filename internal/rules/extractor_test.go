@@ -4654,19 +4654,24 @@ func TestInvokeExpression_CommandRecursion(t *testing.T) {
 	tests := []struct {
 		command  string
 		wantPath string
+		windowsOnly bool
 	}{
 		// Positional form — most common idiom
-		{`Invoke-Expression "Get-Content /etc/passwd"`, "/etc/passwd"},
-		{`iex "Get-Content C:/Users/user/.env"`, "c:/users/user/.env"},
+		{`Invoke-Expression "Get-Content /etc/passwd"`, "/etc/passwd", false},
+		// Windows drive path: normalizer only recognises C:/ as absolute on Windows.
+		{`iex "Get-Content C:/Users/user/.env"`, "c:/users/user/.env", true},
 		// -Command flag form — previously dropped by SkipFlags
-		{`Invoke-Expression -Command "Get-Content /etc/passwd"`, "/etc/passwd"},
-		{`iex -Command "cat /etc/ssh/ssh_host_rsa_key"`, "/etc/ssh/ssh_host_rsa_key"},
+		{`Invoke-Expression -Command "Get-Content /etc/passwd"`, "/etc/passwd", false},
+		{`iex -Command "cat /etc/ssh/ssh_host_rsa_key"`, "/etc/ssh/ssh_host_rsa_key", false},
 		// Nested: iex wrapping another sensitive read
-		{`Invoke-Expression "cat /home/user/.aws/credentials"`, "/home/user/.aws/credentials"},
+		{`Invoke-Expression "cat /home/user/.aws/credentials"`, "/home/user/.aws/credentials", false},
 	}
 	n := NewNormalizerWithEnv("/home/user", "/home/user/project", nil)
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {
+			if tt.windowsOnly && runtime.GOOS != "windows" {
+				t.Skip("Windows path normalisation only applies on Windows")
+			}
 			args, _ := json.Marshal(map[string]string{"command": tt.command})
 			info := ext.Extract("Bash", json.RawMessage(args))
 			normalized := n.NormalizeAll(info.Paths)

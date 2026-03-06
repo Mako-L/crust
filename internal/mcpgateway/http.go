@@ -51,7 +51,14 @@ func NewHTTPGateway(upstreamURL string, engine *rules.Engine) (*HTTPGateway, err
 }
 
 // ServeHTTP dispatches to the appropriate handler based on HTTP method.
+// Cross-origin browser requests are rejected before processing (CSRF protection).
 func (g *HTTPGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := checkOrigin(r); err != nil {
+		log.Warn("Blocked cross-origin request: %s", err)
+		http.Error(w, "Forbidden: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPost:
 		g.handlePost(w, r)

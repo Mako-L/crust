@@ -79,6 +79,10 @@ MCP Client (Claude Desktop, VS Code, etc.)
 Remote MCP Server (https://...)
 ```
 
+### CSRF Protection
+
+The HTTP gateway validates `Origin` and `Sec-Fetch-Site` headers on all requests, blocking cross-origin browser requests per the [MCP spec security requirements](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports). This prevents browser CSRF attacks (CVE-2025-49596 class) where a malicious website sends requests to a local MCP server. Non-browser clients (MCP SDKs, CLI tools) don't send `Origin` and are unaffected.
+
 ### Session Management
 
 The gateway proxies `Mcp-Session-Id` headers bidirectionally and tracks active sessions. When a client sends a DELETE request, the gateway forwards it to the upstream server and cleans up the local session.

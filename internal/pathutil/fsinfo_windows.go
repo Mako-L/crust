@@ -85,7 +85,7 @@ func probeCS(dir string) bool {
 	}
 	altPath := filepath.Join(filepath.Dir(name), altBase)
 
-	_, err = os.Stat(altPath)
+	_, err = os.Stat(altPath) //nolint:gosec // altPath is filepath.Join(os.TempDir(), caseVariantOfOSGeneratedName) — no traversal possible
 	// If err is nil → OS found the file under different case → case-insensitive.
 	// If IsNotExist → OS couldn't find it → case-sensitive.
 	return os.IsNotExist(err)

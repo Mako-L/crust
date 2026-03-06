@@ -368,8 +368,9 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 		{
 			name:  "single char var",
 			input: "$A/foo",
-			// On MSYS2, /a/ is the mount point for drive A: → A:/foo.
-			// Case folding depends on DefaultFS (NTFS may be case-sensitive per-directory).
+			// On MSYS2, /a/ is the MSYS2 mount point for drive A:, so
+			// ExpandMSYS2Path converts it to A:/foo. DefaultFS().Lower
+			// applies the actual filesystem's case folding.
 			expected: func() string {
 				if ShellEnvironment() == EnvMSYS2 {
 					return pathutil.DefaultFS().Lower("A:/foo")
@@ -415,8 +416,9 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 		{
 			name:  "adjacent vars",
 			input: "$A$AB",
-			// On MSYS2, /a/ is the mount point for drive A: → A:/ab.
-			// Case folding depends on DefaultFS (NTFS may be case-sensitive per-directory).
+			// On MSYS2, /a/ is the MSYS2 mount point for drive A:, so
+			// ExpandMSYS2Path converts /a/ab → A:/ab. DefaultFS().Lower
+			// applies the actual filesystem's case folding.
 			expected: func() string {
 				if ShellEnvironment() == EnvMSYS2 {
 					return pathutil.DefaultFS().Lower("A:/ab")
@@ -427,8 +429,9 @@ func TestNormalizer_EnvVarEdgeCases(t *testing.T) {
 		{
 			name:  "braced var allows adjacent text",
 			input: "${A}B",
-			// On case-insensitive filesystems (macOS APFS), the normalizer
-			// lowercases the entire path, so "/aB" becomes "/ab".
+			// DefaultFS().Lower applies the filesystem's case folding:
+			// case-insensitive (macOS APFS, Windows NTFS) → "/ab",
+			// case-sensitive (Linux ext4) → "/aB".
 			expected: pathutil.DefaultFS().Lower("/aB"),
 		},
 	}

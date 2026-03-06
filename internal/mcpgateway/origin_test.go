@@ -52,6 +52,7 @@ func TestCheckOrigin(t *testing.T) {
 
 		// --- BLOCK: Referer fallback ---
 		{name: "referer cross-origin", referer: "https://evil.com/exploit.html", wantErr: true},
+		{name: "referer malformed", referer: "http://%zz", wantErr: true},
 
 		// --- ALLOW: Referer localhost ---
 		{name: "referer localhost", referer: "http://localhost:6277/inspect", wantErr: false},

@@ -29,6 +29,7 @@ var rebindingPattern = regexp.MustCompile(
 //   - No Origin header (and no Referer) → ALLOW (non-browser: MCP SDK, curl, CLI)
 //   - Sec-Fetch-Site == "cross-site"    → BLOCK (unforgeable browser signal)
 //   - Origin is localhost               → ALLOW
+//   - Malformed Referer fallback        → BLOCK (fail-closed)
 //   - Origin is "null"                  → BLOCK (privacy redirect, no legitimate MCP use)
 //   - Origin is non-localhost           → BLOCK (browser CSRF)
 //
@@ -57,7 +58,9 @@ func checkOrigin(r *http.Request) error {
 		if u, err := url.Parse(referer); err == nil {
 			origin = u.Scheme + "://" + u.Host
 		} else {
-			return nil
+			return errors.New(
+				"[Crust] Blocked: request has a malformed Referer header. " +
+					"Only requests from your own machine are allowed")
 		}
 	}
 

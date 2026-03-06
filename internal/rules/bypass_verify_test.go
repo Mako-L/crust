@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/pathutil"
 )
 
 func newTestEngine(t *testing.T) *Engine {
@@ -202,7 +204,7 @@ func TestBypassFix_GlobInPath(t *testing.T) {
 	os.WriteFile(filepath.Join(home, ".aws", "credentials"), []byte("creds"), 0o600)
 
 	// Use forward slashes for shell commands (extractor expects Unix-style)
-	homeSlash := filepath.ToSlash(home)
+	homeSlash := pathutil.ToSlash(home)
 
 	normalizer := NewNormalizerWithEnv(home, project, nil)
 	engine, err := NewEngineWithNormalizer(EngineConfig{}, normalizer)

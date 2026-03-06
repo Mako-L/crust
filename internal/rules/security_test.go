@@ -2,8 +2,9 @@ package rules
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/pathutil"
 )
 
 // TestBuiltinRulesLoad verifies all 21 builtin security rules can be loaded.
@@ -176,10 +177,10 @@ func TestDynamicProtectionRulesSurviveDisableBuiltin(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	// Use filepath.ToSlash to normalize Windows backslash paths to forward
+	// Use pathutil.ToSlash to normalize Windows backslash paths to forward
 	// slashes. Backslashes break both JSON encoding (C:\U → invalid escape)
 	// and bash parsing (the shell AST treats \ as an escape character).
-	rulesDirSlash := filepath.ToSlash(rulesDir)
+	rulesDirSlash := pathutil.ToSlash(rulesDir)
 	deleteArgs, _ := json.Marshal(map[string]string{"command": "rm -rf " + rulesDirSlash + "/foo"})
 	writeArgs, _ := json.Marshal(map[string]string{"file_path": rulesDirSlash + "/evil.yaml", "content": "x"})
 

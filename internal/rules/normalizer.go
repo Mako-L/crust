@@ -136,12 +136,6 @@ func (n *Normalizer) Normalize(path string) string {
 	// Step 4: Convert relative paths to absolute
 	path = n.makeAbsolute(path)
 
-	// Step 4.1: On MSYS2/Git Bash, Windows drives are mounted as /c/, /d/, etc.
-	// Convert /c/Users/... → C:/Users/... so rules with Windows-style patterns match.
-	if ShellEnvironment() == EnvMSYS2 {
-		path = pathutil.ExpandMSYS2Path(path)
-	}
-
 	// SECURITY: Strip NTFS Alternate Data Stream suffixes — on Windows,
 	// "file.txt::$DATA" accesses the same content as "file.txt" but bypasses
 	// glob pattern matching. Strip ":streamname" and "::$DATA" etc.
@@ -177,6 +171,16 @@ func (n *Normalizer) Normalize(path string) string {
 			break
 		}
 		path = pathutil.CleanPath(trimmed)
+	}
+
+	// Step 7.1: On MSYS2/Git Bash, Windows drives are mounted as /c/, /d/, etc.
+	// Runs AFTER CleanPath so that redundant slashes are collapsed first:
+	// "//A" → CleanPath → "/A" → ExpandMSYS2Path → "A:/" (idempotent).
+	// If run before CleanPath, "//A" would pass through unexpanded (s[1]=='/'
+	// not a letter), then clean to "/A", then expand on the second normalize
+	// pass — breaking idempotency.
+	if ShellEnvironment() == EnvMSYS2 {
+		path = pathutil.ExpandMSYS2Path(path)
 	}
 
 	// SECURITY: Lowercase paths on case-insensitive filesystems (NTFS, default

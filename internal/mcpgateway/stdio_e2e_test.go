@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BakeLens/crust/internal/jsonrpc"
+	"github.com/BakeLens/crust/internal/pathutil"
 	"github.com/BakeLens/crust/internal/testutil"
 )
 
@@ -30,7 +31,7 @@ func skipE2E(t *testing.T) {
 // in JSON strings. On Windows, backslashes in paths would be misinterpreted as
 // JSON escape sequences, producing invalid JSON that the MCP server cannot parse.
 func toJSONPath(p string) string {
-	return filepath.ToSlash(p)
+	return pathutil.ToSlash(p)
 }
 
 // runMCPE2E runs the MCP proxy against the real filesystem server and returns

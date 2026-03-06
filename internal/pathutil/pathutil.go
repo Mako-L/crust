@@ -96,10 +96,12 @@ var DefaultFS = sync.OnceValue(func() FSInfo {
 	return DetectFS(home)
 })
 
-// ToSlash converts backslashes to forward slashes for consistent cross-platform
-// path matching. Wraps filepath.ToSlash.
+// ToSlash converts backslashes to forward slashes unconditionally.
+// Use this instead of filepath.ToSlash for agent-sent or rule paths: on
+// Linux/macOS, filepath.ToSlash is a no-op (\ is a valid filename character
+// there), so Windows-style paths from agents would pass through unnormalized.
 func ToSlash(path string) string {
-	return filepath.ToSlash(path)
+	return strings.ReplaceAll(path, `\`, "/")
 }
 
 // IsDriverLetter returns true if c is an ASCII letter (A-Z or a-z).
@@ -133,7 +135,7 @@ func CleanPath(p string) string {
 	}
 
 	// Ensure forward slashes before cleaning.
-	p = filepath.ToSlash(p)
+	p = ToSlash(p)
 
 	if runtime.GOOS == "windows" {
 		// Collapse leading duplicate slashes — agents send Unix-style paths

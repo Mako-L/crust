@@ -75,15 +75,10 @@ func TestToSlash(t *testing.T) {
 		{"already/forward/slashes", "already/forward/slashes"},
 		{"/", "/"},
 		{".", "."},
-	}
-	// filepath.ToSlash only converts backslashes on Windows where \ is the separator.
-	// On Unix, backslashes are valid filename characters and are NOT converted.
-	if runtime.GOOS == "windows" {
-		tests = append(tests, []struct{ in, want string }{
-			{`C:\Users\file`, "C:/Users/file"},
-			{`\\server\share`, "//server/share"},
-			{`C:\Users/mixed\path`, "C:/Users/mixed/path"},
-		}...)
+		// Always converts backslashes — agent-sent paths may use Windows separators on any host OS.
+		{`C:\Users\file`, "C:/Users/file"},
+		{`\\server\share`, "//server/share"},
+		{`C:\Users/mixed\path`, "C:/Users/mixed/path"},
 	}
 	for _, tt := range tests {
 		got := ToSlash(tt.in)

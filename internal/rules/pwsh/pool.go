@@ -10,8 +10,7 @@ const defaultPoolSize = 4
 // Callers acquire a worker for the duration of one Parse() call and return it
 // immediately after, allowing N concurrent parses with N workers.
 type WorkerPool struct {
-	workers  chan *Worker
-	pwshPath string
+	workers chan *Worker
 }
 
 // NewWorkerPool creates a pool of size workers, all pointing to pwshPath.
@@ -32,22 +31,22 @@ func NewWorkerPool(pwshPath string, size int) (*WorkerPool, error) {
 		}
 		ch <- w
 	}
-	return &WorkerPool{workers: ch, pwshPath: pwshPath}, nil
+	return &WorkerPool{workers: ch}, nil
 }
 
 // Parse acquires an idle worker, delegates the parse, then returns the worker.
 // Blocks if all workers are busy. Safe for concurrent use.
 func (p *WorkerPool) Parse(cmd string) (Response, error) {
 	w := <-p.workers
-	resp, err := w.Parse(cmd)
-	p.workers <- w
-	return resp, err
+	defer func() { p.workers <- w }()
+	return w.Parse(cmd)
 }
 
-// Stop shuts down all workers in the pool.
+// Stop waits for all in-flight Parse calls to complete, then shuts down every
+// worker. Must not be called concurrently with itself.
 func (p *WorkerPool) Stop() {
-	close(p.workers)
-	for w := range p.workers {
+	for range cap(p.workers) {
+		w := <-p.workers
 		w.Stop()
 	}
 }

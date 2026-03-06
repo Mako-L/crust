@@ -321,16 +321,16 @@ func TestIsWindowsAbsPath(t *testing.T) {
 		{`/etc/passwd`, false},
 		{`relative/path`, false},
 		{`-flag`, false},
-		{`C:`, false},          // too short — no slash after colon
-		{`1:\bad`, false},      // digit, not letter
-		{``, false},            // empty string
-		{`C`, false},           // single char
-		{`C:\`, true},          // minimum valid absolute drive path (len exactly 3)
-		{`C:relative`, false},  // drive-relative, not absolute
-		{"C: /path", false},    // space at [2], not a slash
-		{"\x80:\\foo", false},  // non-ASCII first byte
-		{`\\`, true},           // bare UNC backslash prefix
-		{`//`, true},           // bare UNC forward-slash prefix
+		{`C:`, false},         // too short — no slash after colon
+		{`1:\bad`, false},     // digit, not letter
+		{``, false},           // empty string
+		{`C`, false},          // single char
+		{`C:\`, true},         // minimum valid absolute drive path (len exactly 3)
+		{`C:relative`, false}, // drive-relative, not absolute
+		{"C: /path", false},   // space at [2], not a slash
+		{"\x80:\\foo", false}, // non-ASCII first byte
+		{`\\`, true},          // bare UNC backslash prefix
+		{`//`, true},          // bare UNC forward-slash prefix
 	}
 	for _, tc := range cases {
 		if got := IsWindowsAbsPath(tc.s); got != tc.want {

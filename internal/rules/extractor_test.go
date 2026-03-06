@@ -4564,11 +4564,13 @@ func TestWindowsBashEnv_PathExtraction(t *testing.T) {
 		cmd      string
 		wantPath string
 	}{
-		// Quoted Windows paths inside interpreter code
+		// Quoted Windows paths inside interpreter code.
+		// normalizeWinPaths runs before bash parsing, so backslash paths are
+		// converted to forward slashes even inside quoted strings.
 		{
 			"python3 single-quoted backslash path",
 			`python3 -c "import shutil; shutil.copy('C:\Users\user\.env', '/tmp/')"`,
-			`C:\Users\user\.env`,
+			`C:/Users/user/.env`, // normalized to / before bash parse
 		},
 		{
 			"python3 single-quoted forward-slash path",
@@ -4578,15 +4580,14 @@ func TestWindowsBashEnv_PathExtraction(t *testing.T) {
 		{
 			"perl single-quoted backslash path",
 			`perl -e "open(F, 'C:\secret.txt')"`,
-			`C:\secret.txt`,
+			`C:/secret.txt`, // normalized to /
 		},
 		// Bare Windows paths on unknown commands.
-		// Backslash paths must be quoted in bash; forward-slash and //UNC are
-		// unquoted-safe since MSYS2 converts them to Windows paths.
+		// Backslash paths are normalized to / before the bash parser sees them.
 		{
 			"unknown cmd drive-letter quoted backslash",
 			`myCustomTool 'C:\Users\user\.env'`,
-			`C:\Users\user\.env`,
+			`C:/Users/user/.env`, // normalized to /
 		},
 		{
 			"unknown cmd drive-letter forward-slash",

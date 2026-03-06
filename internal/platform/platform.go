@@ -81,8 +81,8 @@ func (e ShellEnv) HasBash() bool {
 }
 
 // HasPwsh returns true when PowerShell commands and Windows-style paths are
-// expected. MSYS2/Git Bash users routinely invoke pwsh.exe directly, so this
-// is true for both native Windows and MSYS2.
+// expected. MSYS2/Git Bash and WSL users can invoke pwsh.exe directly via
+// Windows interop, so this is true for native Windows, MSYS2, and WSL.
 func (e ShellEnv) HasPwsh() bool {
-	return e == WindowsNative || e == MSYS2
+	return e == WindowsNative || e == MSYS2 || e == WSL
 }

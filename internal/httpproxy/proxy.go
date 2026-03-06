@@ -567,7 +567,7 @@ func (p *Proxy) handleStreamingRequest(ctx *RequestContext) {
 		FlushInterval: -1,
 	}
 
-	proxy.ServeHTTP(ctx.Writer, ctx.Request) //nolint:gosec // reverse proxy by design forwards client requests
+	proxy.ServeHTTP(ctx.Writer, ctx.Request)
 }
 
 // handleBufferedStreamingRequest handles SSE streaming with response buffering for security evaluation.
@@ -795,7 +795,7 @@ func (p *Proxy) retryAsNonStreaming(ctx *RequestContext) (responseBody json.RawM
 	copyHeaders(ctx.Writer.Header(), resp.Header)
 	ctx.Writer.Header().Set("Content-Length", strconv.Itoa(len(rawBody)))
 	ctx.Writer.WriteHeader(statusCode)
-	_, _ = ctx.Writer.Write(rawBody) //nolint:gosec // binary proxy relay; nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
+	_, _ = ctx.Writer.Write(rawBody) //nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
 	return
 }
 

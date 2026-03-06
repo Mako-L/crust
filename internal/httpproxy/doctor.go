@@ -199,7 +199,7 @@ func checkProvider(client *http.Client, entry providerEntry) DoctorResult {
 	}
 
 	start := time.Now()
-	resp, err := client.Do(req) //nolint:gosec // doctor checks known provider URLs, not user-tainted input
+	resp, err := client.Do(req)
 	result.Duration = time.Since(start)
 
 	if err != nil || resp == nil {

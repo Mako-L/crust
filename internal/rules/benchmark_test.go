@@ -293,7 +293,6 @@ func BenchmarkNormalizer_Combined(b *testing.B) {
 //	dual_parse — current path: bash interpreter then pwsh IPC
 //
 // The ratio dual_parse/bash_only shows how much the pwsh IPC round-trip adds.
-// If > 5×, parallel dispatch (Optimization #1) is worth implementing.
 func BenchmarkExtractor_DualParse(b *testing.B) {
 	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
@@ -375,10 +374,9 @@ func BenchmarkPwshWorker_Parse(b *testing.B) {
 	}
 }
 
-// BenchmarkExtractor_DualParse_Parallel exposes the single-worker serialization
-// bottleneck under concurrent load. If throughput does not scale beyond 1→2
-// goroutines, the pwsh worker mutex is the bottleneck → worker pool (Optimization #2)
-// is worth implementing.
+// BenchmarkExtractor_DualParse_Parallel verifies that the WorkerPool scales
+// under concurrent load. With N workers, N goroutines should each achieve
+// the same per-op latency as a single goroutine (~1.6 ms on this machine).
 func BenchmarkExtractor_DualParse_Parallel(b *testing.B) {
 	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
@@ -427,8 +425,7 @@ func BenchmarkNormalizer_Pattern(b *testing.B) {
 	for _, tc := range patterns {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				_ = normalizer.NormalizePattern(tc.pattern)
 			}
 		})

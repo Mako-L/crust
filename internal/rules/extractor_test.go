@@ -4652,13 +4652,13 @@ func TestMSYS2_PathExtractionEndToEnd(t *testing.T) {
 func TestInvokeExpression_CommandRecursion(t *testing.T) {
 	ext := NewExtractor()
 	tests := []struct {
-		command  string
-		wantPath string
+		command     string
+		wantPath    string
 		windowsOnly bool
 	}{
 		// Positional form — most common idiom
 		{`Invoke-Expression "Get-Content /etc/passwd"`, "/etc/passwd", false},
-		// Windows drive path: normalizer only recognises C:/ as absolute on Windows.
+		// Windows drive path: normalizer only recognizes C:/ as absolute on Windows.
 		{`iex "Get-Content C:/Users/user/.env"`, "c:/users/user/.env", true},
 		// -Command flag form — previously dropped by SkipFlags
 		{`Invoke-Expression -Command "Get-Content /etc/passwd"`, "/etc/passwd", false},

@@ -191,8 +191,8 @@ func (w *Worker) Parse(cmd string) (Response, error) {
 		// goroutine above so it exits cleanly via the buffered ch.
 		w.kill()
 		// Eagerly restart so the next Parse() call doesn't pay startup cost.
-		// Ignore error: if restart fails, the next call retries via w.proc == nil.
-		_ = w.start()
+		// If restart fails, w.proc remains nil and the next call retries.
+		_ = w.start() //nolint:errcheck // best-effort; next Parse() retries on nil proc
 		return Response{}, errors.New("pwsh worker: parse timed out")
 	case res := <-ch:
 		if res.err != nil {

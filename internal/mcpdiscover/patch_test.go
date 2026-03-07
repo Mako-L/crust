@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -333,4 +334,59 @@ func TestPatchConfigFile_SkipsAlreadyWrapped(t *testing.T) {
 	if n != 1 {
 		t.Errorf("expected 1 patched (skip already wrapped), got %d", n)
 	}
+}
+
+// FuzzMCPConfigPatch verifies that patchConfigFile never panics on arbitrary
+// JSON config input and that patched output remains valid JSON.
+func FuzzMCPConfigPatch(f *testing.F) {
+	f.Add(`{"mcpServers":{"fs":{"command":"npx","args":["server"]}}}`)
+	f.Add(`{"mcpServers":{"r":{"url":"https://example.com"}}}`)
+	f.Add(`{"mcpServers":{}}`)
+	f.Add(`{}`)
+	f.Add(`{"mcpServers":{"x":{"command":""}}}`)
+	f.Add(`{"mcpServers":{"x":{"command":null}}}`)
+	f.Add(`{"mcpServers":{"x":{"command":"cmd","args":[1,2]}}}`)
+	f.Add(`{"other":"value","mcpServers":{"fs":{"command":"npx"}}}`)
+	f.Add(`{invalid}`)
+	f.Add(``)
+
+	f.Fuzz(func(t *testing.T, config string) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Use the test binary as a stand-in for the crust binary path.
+		crustBin, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		client := ClientDef{
+			Client:     ClientCursor,
+			ConfigPath: func() string { return path },
+			ServersKey: "mcpServers",
+			URLKeys:    []string{"url"},
+		}
+
+		n, patchErr := patchConfigFile(path, client, crustBin)
+		if patchErr != nil || n == 0 {
+			return // invalid/empty config is fine
+		}
+
+		// If patching succeeded, output must be valid JSON.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read patched file: %v", err)
+		}
+		if !json.Valid(data) {
+			t.Fatalf("patched output is not valid JSON:\n%s", data)
+		}
+
+		// Patched servers must reference crust binary.
+		if !strings.Contains(string(data), crustBin) {
+			t.Fatal("patched output missing crust binary path")
+		}
+	})
 }

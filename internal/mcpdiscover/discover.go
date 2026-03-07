@@ -123,7 +123,10 @@ func parseConfigFile(path string, client ClientDef) ([]MCPServer, error) {
 
 // isCrustWrapped returns true if the command is already routed through crust.
 func isCrustWrapped(cmd string, args []string) bool {
-	if strings.HasSuffix(cmd, "crust") || strings.HasSuffix(cmd, "crust.exe") {
+	// Case-insensitive suffix check: on Windows, binary names can differ in
+	// case (e.g., Crust.EXE). Missing this causes double-wrapping.
+	lower := strings.ToLower(cmd)
+	if strings.HasSuffix(lower, "crust") || strings.HasSuffix(lower, "crust.exe") {
 		return true
 	}
 	// Check if args contain "wrap", "gateway", or legacy "mcp-gateway"

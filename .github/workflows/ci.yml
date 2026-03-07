@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-shell:
-    name: Shell Lint
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,12 +26,6 @@ jobs:
           scandir: '.'
           additional_files: 'install.sh install_openclaw.sh scripts/install-common.sh'
           severity: warning
-
-  lint-go:
-    name: Go Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
@@ -62,7 +56,7 @@ jobs:
 
   security:
     name: Security Checks
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -72,9 +66,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        # go install tool pins are not updated by Dependabot — bump manually
-        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
+      - name: Install gitleaks (DLP dependency)
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: Verify PIE binary
         run: |
@@ -84,45 +77,73 @@ jobs:
 
       - name: Fuzz tests (critical, 30s each — every PR)
         run: |
-          go test ./internal/rules/ -fuzz=FuzzEngineBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzBuiltinRuleBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzNormalizeUnicode -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzLoopbackRegex -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzMCPToolBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzPipeBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzConfusableBypass -fuzztime=30s -short
+          # Pre-build test binaries once; fuzz targets reuse the cached binary.
+          go test -c -o /tmp/rules.fuzz ./internal/rules/
+          go test -c -o /tmp/httpproxy.fuzz ./internal/httpproxy/
+          mkdir -p /tmp/fuzz-cache
+          # Critical fuzz targets (30s each, sequential — these are the most
+          # security-sensitive and get more fuzzing time).
+          /tmp/rules.fuzz -test.fuzz=FuzzEngineBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzBuiltinRuleBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzNormalizeUnicode -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzLoopbackRegex -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzMCPToolBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzPipeBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
+          /tmp/rules.fuzz -test.fuzz=FuzzConfusableBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
 
-      - name: Fuzz tests (full suite, 10s each)
+      - name: Fuzz tests (full suite, 10s each — parallelized)
         run: |
-          go test ./internal/rules/ -fuzz=FuzzNormalizerBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzParseShellCommands -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzMatcherConsistency -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzExtractBashCommand -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzIsSuspiciousInput -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzContainsObfuscation -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzForkBombDetection -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzCommandRegexBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzHostRegexBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzJSONUnicodeEscapeBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzEvasionDetectionBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzGlobCommandBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzPipelineExtraction -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzContentConfusableBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzVariableExpansionEvasion -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzShapeDetectionBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzWebSearchURLBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzNormalAgentFalsePositive -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseSSEEventData -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzCopyHeaders -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzStripHopByHopHeaders -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseAnthropicEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseOpenAIEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzApplyResultToToolCalls -fuzztime=10s -short
+          # Run full suite in parallel batches (2 at a time) to cut wall time
+          # while keeping enough CPU per fuzzer for meaningful coverage.
+          # Each fuzz target gets its own process so failures are isolated.
+          parallel_fuzz() {
+            local bin="$1"; shift
+            local pids=()
+            local targets=()
+            local failed=0
+            for target in "$@"; do
+              "$bin" -test.fuzz="$target" -test.fuzztime=10s -test.short -test.fuzzcachedir=/tmp/fuzz-cache &
+              pids+=($!)
+              targets+=("$target")
+              # Cap concurrency at 2 for better per-target CPU utilization.
+              if [ "${#pids[@]}" -ge 2 ]; then
+                for i in "${!pids[@]}"; do
+                  if ! wait "${pids[$i]}"; then
+                    echo "::error::Fuzz target ${targets[$i]} FAILED"
+                    failed=1
+                  fi
+                done
+                pids=()
+                targets=()
+              fi
+            done
+            for i in "${!pids[@]}"; do
+              if ! wait "${pids[$i]}"; then
+                echo "::error::Fuzz target ${targets[$i]} FAILED"
+                failed=1
+              fi
+            done
+            return $failed
+          }
+          rc=0
+          parallel_fuzz /tmp/rules.fuzz \
+            FuzzNormalizerBypass FuzzParseShellCommands FuzzMatcherConsistency \
+            FuzzExtractBashCommand FuzzIsSuspiciousInput FuzzContainsObfuscation \
+            FuzzForkBombDetection FuzzCommandRegexBypass FuzzHostRegexBypass \
+            FuzzJSONUnicodeEscapeBypass FuzzEvasionDetectionBypass FuzzGlobCommandBypass \
+            FuzzPipelineExtraction FuzzContentConfusableBypass FuzzVariableExpansionEvasion \
+            FuzzShapeDetectionBypass FuzzWebSearchURLBypass FuzzNormalAgentFalsePositive \
+            || rc=1
+          parallel_fuzz /tmp/httpproxy.fuzz \
+            FuzzParseSSEEventData FuzzCopyHeaders FuzzStripHopByHopHeaders \
+            FuzzParseAnthropicEvent FuzzParseOpenAIEvent FuzzParseEvent \
+            FuzzApplyResultToToolCalls \
+            || rc=1
+          exit $rc
 
   test:
     name: Go Test (${{ matrix.os }})
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -134,15 +155,21 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        # go install tool pins are not updated by Dependabot — bump manually
-        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
+      - name: Install gitleaks (DLP dependency, Linux)
+        if: matrix.os != 'windows-latest'
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
-      - name: Build
-        run: go build ./...
+      - name: Install gitleaks (DLP dependency, Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
-      - name: Build (notui)
-        run: go build -tags notui ./...
+      - name: Build (default + notui)
+        run: |
+          go build ./...
+          go build -tags notui ./...
 
       - name: Install PSScriptAnalyzer (Windows only)
         if: matrix.os == 'windows-latest'
@@ -170,7 +197,7 @@ jobs:
   # the expensive steps are skipped on non-main branches.
   test-expensive:
     name: Go Test (${{ matrix.name }})
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ${{ github.ref == 'refs/heads/main' && matrix.os || 'ubuntu-latest' }}
     strategy:
       matrix:
@@ -203,9 +230,16 @@ jobs:
           update: false
           path-type: inherit  # inherit Windows PATH so the Go toolchain is visible
 
-      - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        if: github.ref == 'refs/heads/main'
-        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
+      - name: Install gitleaks (DLP dependency, macOS)
+        if: github.ref == 'refs/heads/main' && !matrix.msys2
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
+
+      - name: Install gitleaks (DLP dependency, Windows MSYS2)
+        if: github.ref == 'refs/heads/main' && matrix.msys2
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
       - name: Build
         if: github.ref == 'refs/heads/main' && !matrix.msys2
@@ -217,11 +251,15 @@ jobs:
 
       - name: Unit tests (with race detector)
         if: github.ref == 'refs/heads/main' && !matrix.msys2
+        env:
+          GOEXPERIMENT: goroutineleakprofile
         run: go test -race -short ./...
 
       - name: Unit tests (MSYS2 — MSYSTEM set by msys2/setup-msys2)
         if: github.ref == 'refs/heads/main' && matrix.msys2
         shell: msys2 {0}
+        env:
+          GOEXPERIMENT: goroutineleakprofile
         run: go test ./internal/rules/... ./internal/pathutil/... -short -count=1 -timeout 120s
 
   test-freebsd:
@@ -255,7 +293,7 @@ jobs:
 
   e2e:
     name: E2E Tests (MCP stdio + HTTP + ACP)
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -273,9 +311,8 @@ jobs:
           npm install -g @modelcontextprotocol/server-filesystem
           npm install -g @modelcontextprotocol/server-everything
 
-      - name: Install gitleaks (DLP Tier 2 runtime dependency)
-        # go install tool pins are not updated by Dependabot — bump manually
-        run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
+      - name: Install gitleaks (DLP dependency)
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: MCP E2E tests (stdio + HTTP)
         run: go test -race ./internal/mcpgateway/... -v -run E2E -timeout 180s
@@ -285,7 +322,7 @@ jobs:
 
   e2e-install:
     name: Install & Agent Config E2E
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -293,6 +330,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Install gitleaks (DLP dependency)
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: Build and install crust binary from current branch
         run: |
@@ -374,7 +414,7 @@ jobs:
 
   e2e-install-windows:
     name: Install & Agent Config E2E (Windows)
-    needs: [lint-go]
+    needs: [lint]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -382,6 +422,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Install gitleaks (DLP dependency)
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
       - name: Build and install crust binary from current branch
         shell: pwsh

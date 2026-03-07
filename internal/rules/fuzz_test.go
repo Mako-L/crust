@@ -156,7 +156,7 @@ func FuzzEngineBypass(f *testing.F) {
 			Block: Block{
 				Paths: []string{"/etc/passwd", "/etc/shadow"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove, OpExecute},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "blocked",
 			Severity: SeverityCritical,
 			Source:   SourceBuiltin,
@@ -167,7 +167,7 @@ func FuzzEngineBypass(f *testing.F) {
 				Paths:  []string{"/home/user/.ssh/id_*", "/home/user/.ssh/authorized_keys"},
 				Except: []string{"/home/user/.ssh/id_*.pub"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "blocked",
 			Severity: SeverityCritical,
 			Source:   SourceBuiltin,
@@ -483,9 +483,11 @@ func FuzzBuiltinRuleBypass(f *testing.F) {
 			if ruleName, isCritical := criticalPaths[np]; isCritical && !result.Matched {
 				// Only flag for operations the rule actually blocks
 				if info.Operation == OpRead || info.Operation == OpWrite ||
-					info.Operation == OpDelete || info.Operation == OpCopy {
-					t.Errorf("BYPASS: %s(%s) normalized to %q but rule %s did NOT block",
-						toolName, argsJSON, np, ruleName)
+					info.Operation == OpDelete || info.Operation == OpCopy ||
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
+					t.Errorf("BYPASS: %s(%s) normalized to %q but rule %s did NOT block (op=%s)",
+						toolName, argsJSON, np, ruleName, info.Operation)
 				}
 			}
 		}
@@ -1563,7 +1565,9 @@ func FuzzShapeDetectionBypass(f *testing.F) {
 		for _, np := range normalizedPaths {
 			if ruleName, isCritical := criticalPaths[np]; isCritical && !result.Matched {
 				if info.Operation == OpRead || info.Operation == OpWrite ||
-					info.Operation == OpDelete || info.Operation == OpCopy {
+					info.Operation == OpDelete || info.Operation == OpCopy ||
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
 					t.Errorf("SHAPE BYPASS: tool=%s args=%s normalized to %q but rule %s did NOT block (op=%s)",
 						toolName, argsJSON, np, ruleName, info.Operation)
 				}
@@ -2099,7 +2103,8 @@ func FuzzPipeBypass(f *testing.F) {
 			if isCriticalPath(np) && !result.Matched {
 				if info.Operation == OpRead || info.Operation == OpWrite ||
 					info.Operation == OpDelete || info.Operation == OpCopy ||
-					info.Operation == OpMove {
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
 					t.Errorf("PIPE BYPASS: command %q → extractor found path %q (op=%s) but engine did NOT block",
 						cmd, np, info.Operation)
 				}
@@ -2116,10 +2121,19 @@ func FuzzPipeBypass(f *testing.F) {
 			left := cmd[:pipeIdx]
 			right := cmd[pipeIdx+9:] // len(" | xargs ") == 9
 			// Left must be "echo /abs/path" (no chains, no subshells)
-			if strings.HasPrefix(left, "echo ") && !strings.ContainsAny(left, ";|&(){}$`#") {
+			if strings.HasPrefix(left, "echo ") && !strings.ContainsAny(left, ";|&(){}$`#<>") {
 				echoArg := strings.TrimSpace(left[5:])
-				// Only check absolute paths to avoid relative-path normalization issues
-				if strings.HasPrefix(echoArg, "/") {
+				// Strip common echo flags (-n, -e, -E) before checking
+				for strings.HasPrefix(echoArg, "-") {
+					if sp := strings.IndexByte(echoArg, ' '); sp > 0 {
+						echoArg = strings.TrimSpace(echoArg[sp+1:])
+					} else {
+						break
+					}
+				}
+				// Only check single absolute paths — multi-word echo args produce
+				// multiple xargs arguments and normalizing them as one path is wrong.
+				if strings.HasPrefix(echoArg, "/") && !strings.ContainsRune(echoArg, ' ') {
 					normalized := normalizer.Normalize(echoArg)
 					if isCriticalPath(normalized) {
 						// Get the wrapped command (first word after xargs)

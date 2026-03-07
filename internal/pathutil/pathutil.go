@@ -177,6 +177,12 @@ func CleanPath(p string) string {
 	return cleaned
 }
 
+// HasExtFold reports whether name has the given extension, case-insensitively.
+// The extension should include the dot (e.g., ".yaml").
+func HasExtFold(name, ext string) bool {
+	return strings.EqualFold(filepath.Ext(name), ext)
+}
+
 // HasPathPrefix checks if path starts with dir as a proper path prefix.
 // Returns true if path == dir OR path starts with dir followed by a separator.
 // Prevents false prefix matches like dir="/rules" matching path="/rules-backup".

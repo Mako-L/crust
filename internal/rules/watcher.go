@@ -2,7 +2,6 @@ package rules
 
 import (
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -111,7 +110,7 @@ func (w *Watcher) run() {
 
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// Only care about YAML files
-	if !strings.HasSuffix(event.Name, ".yaml") {
+	if !isYAMLFile(event.Name) {
 		return
 	}
 

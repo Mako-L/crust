@@ -10,6 +10,9 @@
 #   curl -fsSL .../install.sh | bash -s -- --version v2.0.0
 #   curl -fsSL .../install.sh | bash -s -- --no-tui
 #
+# Non-interactive (Docker/CI):
+#   bash install.sh --local . --prefix /usr/local/bin --no-font --no-completion
+#
 
 set -e
 
@@ -21,7 +24,6 @@ if [ -f "$SCRIPT_DIR/scripts/install-common.sh" ]; then
 else
     # When piped via curl, download common script to temp
     _common_tmp=$(mktemp)
-    trap 'rm -f "$_common_tmp"' EXIT
     if command -v curl &>/dev/null; then
         curl -fsSL "https://raw.githubusercontent.com/BakeLens/crust/main/scripts/install-common.sh" -o "$_common_tmp"
     elif command -v wget &>/dev/null; then
@@ -38,12 +40,23 @@ main() {
     parse_args "$@"
 
     if [ -n "$DO_UNINSTALL" ]; then
+        # shellcheck disable=SC2119 # no extra paths to remove for basic uninstall
         run_uninstall
         exit 0
     fi
 
     print_banner ""
-    init_steps 7
+
+    local src_dir
+    if [ -n "$LOCAL_SRC" ]; then
+        init_steps 5
+        src_dir="$LOCAL_SRC"
+        if [ "$VERSION" = "latest" ]; then
+            VERSION=$(git -C "$src_dir" describe --tags --always 2>/dev/null || echo "dev")
+        fi
+    else
+        init_steps 7
+    fi
 
     step "Detecting system"
     detect_platform
@@ -51,21 +64,24 @@ main() {
     step "Checking requirements"
     check_requirements "go"
 
-    step "Fetching version"
-    resolve_version
+    if [ -z "$LOCAL_SRC" ]; then
+        step "Fetching version"
+        resolve_version
 
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        trap 'rm -rf "$tmp_dir"; rm -f "${_common_tmp:-}"' EXIT
 
-    step "Cloning repository"
-    clone_repo "$VERSION" "$tmp_dir/crust"
+        step "Cloning repository"
+        clone_repo "$VERSION" "$tmp_dir/crust"
+        src_dir="$tmp_dir/crust"
+    fi
 
     step "Building Crust"
-    build_go_binary "$tmp_dir/crust" "$VERSION"
+    build_go_binary "$src_dir" "$VERSION"
 
     step "Installing"
-    install_go_binary "$tmp_dir/crust"
+    install_go_binary "$src_dir"
     setup_data_dir
 
     step "Finalizing"

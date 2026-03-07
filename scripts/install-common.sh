@@ -4,6 +4,8 @@
 # Sourced by install.sh.
 #
 
+set -e
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,11 +33,19 @@ ICON_DIAMOND="◆"  # U+25C6  (brand prefix)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 GITHUB_REPO="BakeLens/crust"
-INSTALL_DIR="$HOME/.local/bin"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="crust"
-DATA_DIR="$HOME/.crust"
+DATA_DIR="${DATA_DIR:-$HOME/.crust}"
 GO_MIN_VERSION="1.26.1"
 GO_DL_BASE="https://dl.google.com/go"
+# Gitleaks version — single source of truth is GITLEAKS_VERSION at repo root.
+# When piped via curl the file isn't available, so we embed a default here.
+GITLEAKS_VERSION="v8.30.0"
+if [ -f "${SCRIPT_DIR:-}/GITLEAKS_VERSION" ]; then
+    GITLEAKS_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/GITLEAKS_VERSION")"
+elif [ -f "${SCRIPT_DIR:-}/../GITLEAKS_VERSION" ]; then
+    GITLEAKS_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../GITLEAKS_VERSION")"
+fi
 
 # ─── Step counter & progress bar ─────────────────────────────────────────────
 _STEP_N=0
@@ -343,7 +353,7 @@ ensure_git() {
 
 # Ensure curl or wget is available; auto-installs curl if missing.
 ensure_download_tool() {
-    command -v curl &>/dev/null || command -v wget &>/dev/null && return 0
+    if command -v curl &>/dev/null || command -v wget &>/dev/null; then return 0; fi
 
     info "curl/wget not found — installing curl"
 
@@ -473,10 +483,15 @@ build_go_binary() {
     else
         spinner_start "Building Crust"
     fi
-    cd "$src_dir" || return 1
-    go fix ./... >/dev/null 2>&1 || true
-    # shellcheck disable=SC2086
-    if go build ${tags_flag} -ldflags "-X main.Version=${version#v}" -o crust . >/dev/null 2>&1; then
+    (
+        set -e
+        cd "$src_dir"
+        go fix ./... >/dev/null 2>&1 || true
+        # shellcheck disable=SC2086
+        go build ${tags_flag} -ldflags "-X main.Version=${version#v}" -o crust .
+    )
+    # shellcheck disable=SC2181
+    if [ $? -eq 0 ]; then
         spinner_ok "Build complete"
     else
         spinner_fail "Build failed"
@@ -500,6 +515,7 @@ setup_data_dir() {
 }
 
 setup_completion() {
+    if [ -n "${SKIP_COMPLETION:-}" ]; then return 0; fi
     if "$INSTALL_DIR/$BINARY_NAME" completion --install >/dev/null 2>&1; then
         ok "Shell completion installed — restart your shell to activate"
     else
@@ -507,7 +523,7 @@ setup_completion() {
     fi
 }
 
-# Install gitleaks for DLP Tier 2 secret detection (200+ patterns).
+# Install gitleaks — required for DLP secret detection (200+ patterns).
 setup_gitleaks() {
     if command -v gitleaks &>/dev/null; then
         ok "gitleaks already installed"
@@ -526,12 +542,11 @@ setup_gitleaks() {
 
     spinner_start "Installing gitleaks via go install"
     # Install directly into INSTALL_DIR so it lands on PATH alongside crust.
-    if GOBIN="$INSTALL_DIR" go install github.com/zricethezav/gitleaks/v8@v8.30.0 >/dev/null 2>&1; then
+    if GOBIN="$INSTALL_DIR" go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}" >/dev/null 2>&1; then
         spinner_ok "gitleaks installed"
         return 0
     fi
-    spinner_warn "gitleaks install failed (DLP Tier 2 will be disabled)"
-    info "Install manually: go install github.com/zricethezav/gitleaks/v8@v8.30.0"
+    spinner_fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
 }
 
 # Install Cascadia Mono NF from Nerd Fonts (optional, non-fatal).
@@ -590,17 +605,36 @@ setup_path_hint() {
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
-# Sets VERSION, BUILD_TAGS, DO_UNINSTALL, SKIP_FONT globals.
+# Sets VERSION, BUILD_TAGS, DO_UNINSTALL, SKIP_FONT, LOCAL_SRC globals.
 parse_args() {
     VERSION="latest"
     BUILD_TAGS=""
     DO_UNINSTALL=""
     DO_PURGE=""
     SKIP_FONT=""
+    SKIP_COMPLETION=""
+    LOCAL_SRC=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             --version|-v)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
                 VERSION="$2"
+                shift 2
+                ;;
+            --prefix)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --data-dir)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
+                DATA_DIR="$2"
+                shift 2
+                ;;
+            --local)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
+                # shellcheck disable=SC2034
+                LOCAL_SRC="$2"
                 shift 2
                 ;;
             --no-tui)
@@ -610,6 +644,10 @@ parse_args() {
                 ;;
             --no-font)
                 SKIP_FONT="1"
+                shift
+                ;;
+            --no-completion)
+                SKIP_COMPLETION="1"
                 shift
                 ;;
             --uninstall)
@@ -628,12 +666,16 @@ parse_args() {
                 echo "Crust Installer"
                 echo ""
                 echo "Options:"
-                echo "  --version, -v    Install specific version or branch (e.g. v2.0.0, main)"
-                echo "  --no-tui         Build without TUI dependencies (plain text only)"
-                echo "  --no-font        Skip Nerd Font installation"
-                echo "  --uninstall      Uninstall crust (keeps rules, config, secrets, DB)"
-                echo "  --purge          Uninstall crust and delete all data including DB"
-                echo "  --help, -h       Show this help"
+                echo "  --version, -v      Install specific version or branch (e.g. v2.0.0, main)"
+                echo "  --prefix <dir>     Install binary to <dir> (default: ~/.local/bin)"
+                echo "  --data-dir <dir>   Data directory (default: ~/.crust)"
+                echo "  --local <dir>      Build from local source directory (skip clone)"
+                echo "  --no-tui           Build without TUI dependencies (plain text only)"
+                echo "  --no-font          Skip Nerd Font installation"
+                echo "  --no-completion    Skip shell completion installation"
+                echo "  --uninstall        Uninstall crust (keeps rules, config, secrets, DB)"
+                echo "  --purge            Uninstall crust and delete DB (keeps config, secrets, rules)"
+                echo "  --help, -h         Show this help"
                 exit 0
                 ;;
             *)
@@ -647,6 +689,7 @@ parse_args() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 # Uninstall crust. Pass optional extra paths to remove.
+# shellcheck disable=SC2120 # extra paths are optional
 run_uninstall() {
     print_banner ""
     print_bold "Uninstalling Crust..."

@@ -21,7 +21,7 @@
     Uninstall crust (keeps rules, config, secrets, DB).
 
 .PARAMETER Purge
-    Uninstall crust and delete all data including DB.
+    Uninstall crust and delete DB (keeps config, secrets, rules).
 
 .PARAMETER Help
     Show usage help.
@@ -39,6 +39,7 @@ param(
     [switch]$NoFont,
     [switch]$Uninstall,
     [switch]$Purge,
+    [switch]$SourceOnly,
     [Alias("h")]
     [switch]$Help
 )
@@ -259,16 +260,17 @@ function Install-Gitleaks {
         Write-Ok "gitleaks already installed"
         return
     }
-    Write-Running "Installing gitleaks via go install"
-    try {
-        $null = & go install github.com/zricethezav/gitleaks/v8@v8.30.0 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "gitleaks installed"
-            return
-        }
-    } catch {}
-    Write-Warn "gitleaks install failed (DLP Tier 2 will be disabled)"
-    Write-Info "Install manually: go install github.com/zricethezav/gitleaks/v8@v8.30.0"
+    # Read version from GITLEAKS_VERSION (single source of truth)
+    $glVer = "v8.30.0"
+    $glVerFile = Join-Path $PSScriptRoot "GITLEAKS_VERSION"
+    if (Test-Path $glVerFile) { $glVer = (Get-Content $glVerFile -Raw).Trim() }
+    Write-Running "Installing gitleaks $glVer via go install"
+    & go install "github.com/zricethezav/gitleaks/v8@$glVer" 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "gitleaks installed"
+        return
+    }
+    Write-Fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@$glVer"
 }
 
 function Install-NerdFont {
@@ -314,6 +316,11 @@ function Install-NerdFont {
     }
 }
 
+# ─── Source-only mode ─────────────────────────────────────────────────────
+# When dot-sourced with -SourceOnly, export functions without running main.
+# Usage: . .\install.ps1 -SourceOnly; Install-Gitleaks
+if ($SourceOnly) { return }
+
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 if ($Help) {
     Write-Host "Crust Installer"
@@ -323,7 +330,7 @@ if ($Help) {
     Write-Host "  -NoTUI           Build without TUI dependencies (plain text only)"
     Write-Host "  -NoFont          Skip Nerd Font installation"
     Write-Host "  -Uninstall       Uninstall crust (keeps rules, config, secrets, DB)"
-    Write-Host "  -Purge           Uninstall crust and delete all data including DB"
+    Write-Host "  -Purge           Uninstall crust and delete DB (keeps config, secrets, rules)"
     Write-Host "  -Help, -h        Show this help"
     exit 0
 }
@@ -442,10 +449,10 @@ $TmpDir = Join-Path ([IO.Path]::GetTempPath()) "crust-install-$(Get-Random)"
 try {
     Write-Step "Cloning repository"
     $CloneUrl  = "https://github.com/$GitHubRepo.git"
-    $gitResult = Start-Process git -ArgumentList "clone","--depth","1","--branch",$Version,$CloneUrl,$TmpDir `
-        -Wait -NoNewWindow -PassThru 2>$null
-    if ($gitResult.ExitCode -ne 0) {
+    & git clone --depth 1 --branch $Version $CloneUrl $TmpDir 2>$null
+    if ($LASTEXITCODE -ne 0) {
         & git clone --depth 1 $CloneUrl $TmpDir
+        if ($LASTEXITCODE -ne 0) { Write-Fail "Clone failed — check your internet connection" }
     }
     Write-Ok "Repository cloned"
 

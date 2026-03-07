@@ -67,8 +67,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP dependency)
-        # Version pinned in GITLEAKS_VERSION at repo root (single source of truth)
-        run: go install "github.com/zricethezav/gitleaks/v8@$(tr -d '[:space:]' < GITLEAKS_VERSION)"
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: Verify PIE binary
         run: |
@@ -157,9 +156,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gitleaks (DLP dependency)
-        # Version pinned in GITLEAKS_VERSION at repo root (single source of truth)
         shell: bash
-        run: go install "github.com/zricethezav/gitleaks/v8@$(tr -d '[:space:]' < GITLEAKS_VERSION)"
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: Build (default + notui)
         run: |
@@ -228,7 +226,7 @@ jobs:
       - name: Install gitleaks (DLP dependency)
         if: github.ref == 'refs/heads/main'
         shell: bash
-        run: go install "github.com/zricethezav/gitleaks/v8@$(tr -d '[:space:]' < GITLEAKS_VERSION)"
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: Build
         if: github.ref == 'refs/heads/main' && !matrix.msys2
@@ -301,8 +299,7 @@ jobs:
           npm install -g @modelcontextprotocol/server-everything
 
       - name: Install gitleaks (DLP dependency)
-        # Version pinned in GITLEAKS_VERSION at repo root (single source of truth)
-        run: go install "github.com/zricethezav/gitleaks/v8@$(tr -d '[:space:]' < GITLEAKS_VERSION)"
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
 
       - name: MCP E2E tests (stdio + HTTP)
         run: go test -race ./internal/mcpgateway/... -v -run E2E -timeout 180s

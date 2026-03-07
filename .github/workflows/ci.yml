@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-shell:
-    name: Shell Lint
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,12 +26,6 @@ jobs:
           scandir: '.'
           additional_files: 'install.sh install_openclaw.sh scripts/install-common.sh'
           severity: warning
-
-  lint-go:
-    name: Go Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
@@ -62,7 +56,7 @@ jobs:
 
   security:
     name: Security Checks
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -84,45 +78,52 @@ jobs:
 
       - name: Fuzz tests (critical, 30s each — every PR)
         run: |
-          go test ./internal/rules/ -fuzz=FuzzEngineBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzBuiltinRuleBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzNormalizeUnicode -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzLoopbackRegex -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzMCPToolBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzPipeBypass -fuzztime=30s -short
-          go test ./internal/rules/ -fuzz=FuzzConfusableBypass -fuzztime=30s -short
+          # Pre-build test binaries once; fuzz targets reuse the cached binary.
+          go test -c -o /tmp/rules.fuzz ./internal/rules/
+          go test -c -o /tmp/httpproxy.fuzz ./internal/httpproxy/
+          # Critical fuzz targets (30s each, sequential — these are the most
+          # security-sensitive and get more fuzzing time).
+          /tmp/rules.fuzz -test.fuzz=FuzzEngineBypass -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzBuiltinRuleBypass -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzNormalizeUnicode -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzLoopbackRegex -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzMCPToolBypass -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzPipeBypass -test.fuzztime=30s -test.short
+          /tmp/rules.fuzz -test.fuzz=FuzzConfusableBypass -test.fuzztime=30s -test.short
 
-      - name: Fuzz tests (full suite, 10s each)
+      - name: Fuzz tests (full suite, 10s each — parallelized)
         run: |
-          go test ./internal/rules/ -fuzz=FuzzNormalizerBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzParseShellCommands -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzMatcherConsistency -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzExtractBashCommand -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzIsSuspiciousInput -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzContainsObfuscation -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzForkBombDetection -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzCommandRegexBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzHostRegexBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzJSONUnicodeEscapeBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzEvasionDetectionBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzGlobCommandBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzPipelineExtraction -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzContentConfusableBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzVariableExpansionEvasion -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzShapeDetectionBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzWebSearchURLBypass -fuzztime=10s -short
-          go test ./internal/rules/ -fuzz=FuzzNormalAgentFalsePositive -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseSSEEventData -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzCopyHeaders -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzStripHopByHopHeaders -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseAnthropicEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseOpenAIEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzParseEvent -fuzztime=10s -short
-          go test ./internal/httpproxy/ -fuzz=FuzzApplyResultToToolCalls -fuzztime=10s -short
+          # Run full suite in parallel batches (4 at a time) to cut wall time.
+          # Each fuzz target gets its own process so failures are isolated.
+          parallel_fuzz() {
+            local bin="$1"; shift
+            local pids=()
+            for target in "$@"; do
+              "$bin" -test.fuzz="$target" -test.fuzztime=10s -test.short &
+              pids+=($!)
+              # Cap concurrency at 4 to avoid starving the fuzzer of CPU.
+              if [ "${#pids[@]}" -ge 4 ]; then
+                for p in "${pids[@]}"; do wait "$p" || exit 1; done
+                pids=()
+              fi
+            done
+            for p in "${pids[@]}"; do wait "$p" || exit 1; done
+          }
+          parallel_fuzz /tmp/rules.fuzz \
+            FuzzNormalizerBypass FuzzParseShellCommands FuzzMatcherConsistency \
+            FuzzExtractBashCommand FuzzIsSuspiciousInput FuzzContainsObfuscation \
+            FuzzForkBombDetection FuzzCommandRegexBypass FuzzHostRegexBypass \
+            FuzzJSONUnicodeEscapeBypass FuzzEvasionDetectionBypass FuzzGlobCommandBypass \
+            FuzzPipelineExtraction FuzzContentConfusableBypass FuzzVariableExpansionEvasion \
+            FuzzShapeDetectionBypass FuzzWebSearchURLBypass FuzzNormalAgentFalsePositive
+          parallel_fuzz /tmp/httpproxy.fuzz \
+            FuzzParseSSEEventData FuzzCopyHeaders FuzzStripHopByHopHeaders \
+            FuzzParseAnthropicEvent FuzzParseOpenAIEvent FuzzParseEvent \
+            FuzzApplyResultToToolCalls
 
   test:
     name: Go Test (${{ matrix.os }})
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -138,11 +139,10 @@ jobs:
         # go install tool pins are not updated by Dependabot — bump manually
         run: go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
-      - name: Build
-        run: go build ./...
-
-      - name: Build (notui)
-        run: go build -tags notui ./...
+      - name: Build (default + notui)
+        run: |
+          go build ./...
+          go build -tags notui ./...
 
       - name: Install PSScriptAnalyzer (Windows only)
         if: matrix.os == 'windows-latest'
@@ -170,7 +170,7 @@ jobs:
   # the expensive steps are skipped on non-main branches.
   test-expensive:
     name: Go Test (${{ matrix.name }})
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ${{ github.ref == 'refs/heads/main' && matrix.os || 'ubuntu-latest' }}
     strategy:
       matrix:
@@ -259,7 +259,7 @@ jobs:
 
   e2e:
     name: E2E Tests (MCP stdio + HTTP + ACP)
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -289,7 +289,7 @@ jobs:
 
   e2e-install:
     name: Install & Agent Config E2E
-    needs: [lint-go]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -378,7 +378,7 @@ jobs:
 
   e2e-install-windows:
     name: Install & Agent Config E2E (Windows)
-    needs: [lint-go]
+    needs: [lint]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6

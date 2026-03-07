@@ -11,7 +11,7 @@ Agent Request ──▶ [Layer 0: History Scan] ──▶ LLM ──▶ [Layer 1
                    (14-30μs)                             (14-30μs)
                "Bad agent detected"                   "Action blocked"
 
-Rule Evaluation (13 steps, 0-12):
+Rule Evaluation:
   0.  Self-protection pre-checker → blocks management API/socket access
   1.  Sanitize tool name → strip null bytes, control chars
   2.  Extract paths, commands, content from tool arguments
@@ -29,7 +29,7 @@ Rule Evaluation (13 steps, 0-12):
 
 **Layer 0 (Request History):** Scans tool_calls in conversation history. Catches "bad agent" patterns where malicious actions already occurred in past turns.
 
-**Rule Engine:** Evaluates tool calls through the 13-step pipeline above. Self-protection (step 0) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 10) use a registry pattern — add new guards without modifying the pipeline.
+**Rule Engine:** Evaluates tool calls through the pipeline above. Self-protection (step 0) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 10) use a registry pattern — add new guards without modifying the pipeline.
 
 **[MCP Gateway](mcp.md) (`crust mcp gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Inspects both directions — client→server requests (`tools/call`, `resources/read`) and server→client responses (DLP secret scanning). Works with any MCP server (filesystem, database, custom).
 

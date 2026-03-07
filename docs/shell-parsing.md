@@ -72,6 +72,28 @@ Eliminating minPrint in favor of reconstructing `info.Command` from Runner outpu
 
 The Runner is seeded with the real process environment (`os.Environ()`) so variables like `$HOME` resolve to actual values at extraction time. For testing, `NewExtractorWithEnv` accepts a custom environment map.
 
+## Windows Shell Coverage
+
+On Windows, `Bash` tool calls may contain commands targeting any of the three shell environments: PowerShell, cmd.exe, or bash-on-Windows (MSYS2/Git Bash, WSL). Crust handles all three:
+
+| Shell | How extracted |
+|-------|--------------|
+| **[PowerShell](https://learn.microsoft.com/en-us/powershell/)** (`pwsh.exe` / `powershell.exe`) | Dual-parse: bash AST + pwsh worker pool (see below) |
+| **[cmd.exe](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd)** (`cmd /c <inner>`) | Recursive parse: inner command string re-parsed as bash |
+| **[WSL](https://learn.microsoft.com/en-us/windows/wsl/)** (`wsl <cmd>`) | Wrapper stripping: `wsl cat /etc/passwd` → extracts `cat /etc/passwd` |
+| **[Batch files](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands)** (`.bat` / `.cmd`) | Detected and flagged as `OpExecute`; no inner parse |
+| **[Invoke-Item](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/invoke-item) / ii** | PS cmdlet for shell-open; path extracted as `OpExecute` |
+
+### Windows Path Normalization
+
+Before bash parsing, `normalizeWinPaths` converts Windows-style backslash paths to forward slashes so the POSIX bash parser doesn't treat `\` as an escape character:
+
+- `C:\Users\user\.env` → `C:/Users/user/.env`
+- `\\server\share\file` → `//server/share/file`
+- `%USERPROFILE%\.env` → `%USERPROFILE%/.env` (cmd.exe `%VAR%` syntax)
+
+This runs universally — not just for PowerShell-looking commands — before the bash parse step. The pwsh worker receives the original (un-normalized) command so backslash paths are preserved for PS AST resolution.
+
 ## PowerShell (Windows 10/11)
 
 On Windows 10/11, `Bash` tool calls may contain PowerShell commands. The bash parser handles many PS cmdlets correctly (they look like POSIX commands), but fails on PS-specific syntax: `$var="value"` assignments, `C:\path\with\backslashes`, and `\\UNC\paths`.

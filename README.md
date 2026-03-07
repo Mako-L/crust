@@ -61,7 +61,7 @@ Crust has five entry points — use one or combine them:
 | **ACP Stdio Proxy** | `crust acp-wrap` | Wraps any [ACP](https://agentclientprotocol.com) agent, intercepting file reads, writes, and terminal commands before the IDE executes them. |
 | **Auto-detect** | `crust wrap` | Inspects both MCP and ACP methods simultaneously — use when you don't know which protocol a subprocess speaks. |
 
-All entry points apply the same [13-step evaluation pipeline](docs/how-it-works.md) — self-protection, input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path normalization, symlink resolution, and rule matching — each step in microseconds.
+All entry points apply the same [evaluation pipeline](docs/how-it-works.md) — self-protection, input sanitization, Unicode normalization, obfuscation detection, DLP secret scanning, path normalization, symlink resolution, and rule matching — each step in microseconds.
 
 All activity is logged locally to encrypted storage.
 

@@ -357,18 +357,47 @@ if ($Uninstall) {
     }
 
     if (Test-Path $DataDir) {
-        # Remove runtime files; preserve rules.d (user-authored content).
-        $rulesDir = Join-Path $DataDir "rules.d"
-        Get-ChildItem $DataDir | Where-Object { $_.Name -ne "rules.d" } |
-            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-        # Remove the data dir itself if rules.d is absent or empty.
-        $hasRules = (Test-Path $rulesDir) -and (@(Get-ChildItem $rulesDir -ErrorAction SilentlyContinue).Count -gt 0)
-        if (-not $hasRules) {
-            Remove-Item $DataDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+
+        # ── Runtime files (always removed silently) ───────────────────────────
+        @("crust.pid", "crust.port", "crust.log") | ForEach-Object {
+            $f = Join-Path $DataDir $_
+            if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+        }
+        Get-ChildItem $DataDir -Filter "crust-api-*.sock" -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+        # ── Telemetry database (prompt) ───────────────────────────────────────
+        $dbPath = Join-Path $DataDir "crust.db"
+        if (Test-Path $dbPath) {
+            $confirm = if ($PlainMode) { 'y' } else {
+                Read-Host "  Remove telemetry database ($dbPath)? [y/N]"
+            }
+            if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+                Remove-Item $dbPath -Force -ErrorAction SilentlyContinue
+                Write-Ok "Telemetry database removed"
+            } else {
+                Write-Info "Database kept: $dbPath"
+            }
+        }
+
+        # ── User data (always kept) ───────────────────────────────────────────
+        # rules.d  — user-authored security rules
+        # config.yaml — user configuration
+        # secrets.json — stored API keys
+        $configPath  = Join-Path $DataDir "config.yaml"
+        $secretsPath = Join-Path $DataDir "secrets.json"
+        $rulesDir    = Join-Path $DataDir "rules.d"
+        if (Test-Path $configPath)  { Write-Info "Config kept:  $configPath" }
+        if (Test-Path $secretsPath) { Write-Info "Secrets kept: $secretsPath" }
+        if ((Test-Path $rulesDir) -and @(Get-ChildItem $rulesDir -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Info "Rules kept:   $rulesDir"
+        }
+
+        # Remove the data dir itself only if nothing remains.
+        if (@(Get-ChildItem $DataDir -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item $DataDir -Force -ErrorAction SilentlyContinue
             Write-Ok "Data directory removed"
-        } else {
-            Write-Ok "Runtime data removed"
-            Write-Info "Your rules are kept at: $rulesDir"
         }
     }
 

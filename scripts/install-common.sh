@@ -669,16 +669,48 @@ run_uninstall() {
     done
 
     if [ -d "$DATA_DIR" ]; then
-        # Remove runtime files; preserve rules.d (user-authored content).
-        local rules_dir="$DATA_DIR/rules.d"
-        find "$DATA_DIR" -mindepth 1 -maxdepth 1 ! -name "rules.d" -exec rm -rf {} +
-        # Remove the data dir itself if rules.d is absent or empty.
-        if [ ! -d "$rules_dir" ] || [ -z "$(ls -A "$rules_dir" 2>/dev/null)" ]; then
-            rm -rf "$DATA_DIR"
+        echo ""
+
+        # ── Runtime files (always removed silently) ───────────────────────────
+        rm -f "$DATA_DIR/crust.pid" "$DATA_DIR/crust.port" "$DATA_DIR/crust.log"
+        rm -f "$DATA_DIR"/crust-api-*.sock
+
+        # ── Telemetry database (prompt) ───────────────────────────────────────
+        if [ -f "$DATA_DIR/crust.db" ]; then
+            local confirm_db
+            if [ "$_PLAIN" = "1" ]; then
+                confirm_db="y"
+            else
+                echo -e "  ${YELLOW}Remove telemetry database ($DATA_DIR/crust.db)?${NC}"
+                echo "  This contains your request history and security event data."
+                read -r -p "  Remove? [y/N] " confirm_db
+            fi
+            if [[ "$confirm_db" =~ ^[Yy]$ ]]; then
+                rm -f "$DATA_DIR/crust.db"
+                ok "Telemetry database removed"
+            else
+                info "Database kept: $DATA_DIR/crust.db"
+            fi
+        fi
+
+        # ── User data (always kept) ───────────────────────────────────────────
+        # rules.d  — user-authored security rules
+        # config.yaml — user configuration
+        # secrets.json — stored API keys
+        if [ -f "$DATA_DIR/config.yaml" ]; then
+            info "Config kept:  $DATA_DIR/config.yaml"
+        fi
+        if [ -f "$DATA_DIR/secrets.json" ]; then
+            info "Secrets kept: $DATA_DIR/secrets.json"
+        fi
+        if [ -d "$DATA_DIR/rules.d" ] && [ -n "$(ls -A "$DATA_DIR/rules.d" 2>/dev/null)" ]; then
+            info "Rules kept:   $DATA_DIR/rules.d/"
+        fi
+
+        # Remove the data dir itself only if nothing remains.
+        if [ -z "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+            rmdir "$DATA_DIR"
             ok "Data directory removed"
-        else
-            ok "Runtime data removed"
-            info "Your rules are kept at: $rules_dir"
         fi
     fi
 

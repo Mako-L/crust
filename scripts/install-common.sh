@@ -351,7 +351,7 @@ ensure_git() {
 
 # Ensure curl or wget is available; auto-installs curl if missing.
 ensure_download_tool() {
-    command -v curl &>/dev/null || command -v wget &>/dev/null && return 0
+    if command -v curl &>/dev/null || command -v wget &>/dev/null; then return 0; fi
 
     info "curl/wget not found — installing curl"
 
@@ -481,10 +481,15 @@ build_go_binary() {
     else
         spinner_start "Building Crust"
     fi
-    cd "$src_dir" || return 1
-    go fix ./... >/dev/null 2>&1 || true
-    # shellcheck disable=SC2086
-    if go build ${tags_flag} -ldflags "-X main.Version=${version#v}" -o crust . >/dev/null 2>&1; then
+    (
+        set -e
+        cd "$src_dir"
+        go fix ./... >/dev/null 2>&1 || true
+        # shellcheck disable=SC2086
+        go build ${tags_flag} -ldflags "-X main.Version=${version#v}" -o crust .
+    )
+    # shellcheck disable=SC2181
+    if [ $? -eq 0 ]; then
         spinner_ok "Build complete"
     else
         spinner_fail "Build failed"
@@ -610,18 +615,22 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --version|-v)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
                 VERSION="$2"
                 shift 2
                 ;;
             --prefix)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
                 INSTALL_DIR="$2"
                 shift 2
                 ;;
             --data-dir)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
                 DATA_DIR="$2"
                 shift 2
                 ;;
             --local)
+                [ $# -ge 2 ] || { echo "Error: $1 requires an argument" >&2; exit 1; }
                 # shellcheck disable=SC2034
                 LOCAL_SRC="$2"
                 shift 2

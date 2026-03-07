@@ -24,7 +24,6 @@ if [ -f "$SCRIPT_DIR/scripts/install-common.sh" ]; then
 else
     # When piped via curl, download common script to temp
     _common_tmp=$(mktemp)
-    trap 'rm -f "$_common_tmp"' EXIT
     if command -v curl &>/dev/null; then
         curl -fsSL "https://raw.githubusercontent.com/BakeLens/crust/main/scripts/install-common.sh" -o "$_common_tmp"
     elif command -v wget &>/dev/null; then
@@ -71,7 +70,7 @@ main() {
 
         local tmp_dir
         tmp_dir=$(mktemp -d)
-        trap 'rm -rf "$tmp_dir"' EXIT
+        trap 'rm -rf "$tmp_dir"; rm -f "${_common_tmp:-}"' EXIT
 
         step "Cloning repository"
         clone_repo "$VERSION" "$tmp_dir/crust"

@@ -3673,7 +3673,7 @@ func TestLooksLikePowerShell(t *testing.T) {
 	}
 }
 
-func TestNormalizePSBackslashPaths(t *testing.T) {
+func TestNormalizeWinPaths(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -3703,6 +3703,16 @@ func TestNormalizePSBackslashPaths(t *testing.T) {
 			name:  "forward slash windows path unchanged",
 			input: "Get-Content C:/Users/user/.env",
 			want:  "Get-Content C:/Users/user/.env",
+		},
+		{
+			name:  "cmd.exe percent-var path",
+			input: `cmd /c type %USERPROFILE%\.env`,
+			want:  "cmd /c type %USERPROFILE%/.env",
+		},
+		{
+			name:  "cmd.exe percent-var multi-segment",
+			input: `del %APPDATA%\secrets\token.txt`,
+			want:  "del %APPDATA%/secrets/token.txt",
 		},
 	}
 	for _, tt := range tests {

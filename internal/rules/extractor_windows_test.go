@@ -2220,8 +2220,8 @@ func TestExtract_BatchFileExecution(t *testing.T) {
 // Gap: the extractor's env expansion handles $VAR and ${VAR} (bash/PS) but
 // not the %VAR% syntax native to cmd.exe.
 //
-// Phase 1 (this test): cmd /c recursion works (Gap 1 fixed) but %VAR% is
-// not expanded; the literal token appears in Paths.
+// cmd /c recursion is implemented; %VAR% expansion is not yet implemented.
+// The literal %VAR%/path token appears in Paths until percent-expansion lands.
 // TODO: Once percent-expansion is implemented, assert the resolved paths
 // (e.g. C:\Users\user\.env) instead of the raw %USERPROFILE%\.env tokens.
 func TestExtract_CmdPercentVarExpansion(t *testing.T) {
@@ -2235,7 +2235,7 @@ func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 		name        string
 		cmd         string
 		wantOp      Operation
-		wantRawPath string // literal unexpanded token expected until Gap 6 is fixed
+		wantRawPath string // literal unexpanded token; %VAR% expansion not yet implemented
 	}{
 		{
 			name:        "type with %USERPROFILE%",
@@ -2261,7 +2261,7 @@ func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			args, _ := json.Marshal(map[string]string{"command": tt.cmd})
 			info := ext.Extract("Bash", json.RawMessage(args))
-			// Operation check requires Gap 1 (cmd /c recursion) to be fixed first.
+			// cmd /c recursion is implemented; operation check is active.
 			if tt.wantOp != OpNone && info.Operation != tt.wantOp {
 				t.Errorf("Operation = %v, want %v (cmd=%q)", info.Operation, tt.wantOp, tt.cmd)
 			}

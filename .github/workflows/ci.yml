@@ -326,7 +326,7 @@ jobs:
 
       - name: Graceful shutdown
         run: |
-          docker stop --time 5 crust-ci
+          docker stop --timeout 5 crust-ci
           EXIT_CODE=$(docker inspect crust-ci --format='{{.State.ExitCode}}')
           [ "$EXIT_CODE" = "0" ] || { echo "Exit code: $EXIT_CODE"; docker logs crust-ci; exit 1; }
 

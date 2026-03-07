@@ -2,7 +2,6 @@ package rules
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -180,7 +179,7 @@ func (h *APIHandler) HandleAddFile(c *gin.Context) {
 	if filename == "" {
 		filename = "custom.yaml"
 	}
-	if !strings.HasSuffix(filename, ".yaml") {
+	if !isYAMLFile(filename) {
 		filename += ".yaml"
 	}
 

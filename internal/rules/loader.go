@@ -21,6 +21,11 @@ import (
 //go:embed builtin/*.yaml
 var builtinFS embed.FS
 
+// isYAMLFile reports whether a filename has a .yaml extension (case-insensitive).
+func isYAMLFile(name string) bool {
+	return pathutil.HasExtFold(name, ".yaml")
+}
+
 // Loader handles loading rules from embedded files and user directory
 type Loader struct {
 	userDir       string
@@ -56,7 +61,7 @@ func (l *Loader) LoadBuiltin() ([]Rule, error) {
 			return err
 		}
 
-		if d.IsDir() || !strings.HasSuffix(path, ".yaml") {
+		if d.IsDir() || !isYAMLFile(path) {
 			return nil
 		}
 
@@ -126,7 +131,7 @@ func (l *Loader) LoadUser() ([]Rule, error) {
 	var tampered []string
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+		if entry.IsDir() || !isYAMLFile(entry.Name()) {
 			log.Trace("  Skipping non-YAML: %s", entry.Name())
 			continue
 		}
@@ -293,13 +298,14 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path: %w", err)
 	}
-	absPath := pathutil.ToSlash(absPathRaw)
+	fs := pathutil.DefaultFS()
+	absPath := fs.Lower(pathutil.ToSlash(absPathRaw))
 
 	absUserDirRaw, err := filepath.Abs(l.userDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve user dir: %w", err)
 	}
-	absUserDir := pathutil.ToSlash(absUserDirRaw)
+	absUserDir := fs.Lower(pathutil.ToSlash(absUserDirRaw))
 
 	// Ensure the path is within the user directory.
 	// HasPathPrefix handles trailing separator to prevent prefix issues
@@ -316,7 +322,16 @@ func (l *Loader) ValidatePathInDirectory(filename string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to resolve symlink: %w", err)
 			}
-			if !pathutil.HasPathPrefix(pathutil.ToSlash(absRealPathRaw), absUserDir) {
+			// Resolve symlinks on userDir too (e.g., macOS /var → /private/var)
+			// so both sides use the same canonical base.
+			realUserDir := l.userDir
+			if rd, err := filepath.EvalSymlinks(l.userDir); err == nil {
+				if ad, err := filepath.Abs(rd); err == nil {
+					realUserDir = ad
+				}
+			}
+			absRealUserDir := fs.Lower(pathutil.ToSlash(realUserDir))
+			if !pathutil.HasPathPrefix(fs.Lower(pathutil.ToSlash(absRealPathRaw)), absRealUserDir) {
 				return "", errors.New("symlink points outside rules directory")
 			}
 		}
@@ -348,7 +363,7 @@ func (l *Loader) ListUserRuleFiles() ([]string, error) {
 
 	var files []string
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yaml") {
+		if !entry.IsDir() && isYAMLFile(entry.Name()) {
 			files = append(files, entry.Name())
 		}
 	}

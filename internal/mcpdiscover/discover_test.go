@@ -284,6 +284,9 @@ func TestIsCrustWrapped(t *testing.T) {
 	}{
 		{"crust binary", "/usr/local/bin/crust", nil, true},
 		{"crust.exe binary", `C:\Program Files\crust.exe`, nil, true},
+		{"upper case CRUST", `/usr/local/bin/CRUST`, nil, true},
+		{"mixed case Crust.EXE", `C:\Program Files\Crust.EXE`, nil, true},
+		{"upper CRUST.EXE", `C:\CRUST.EXE`, nil, true},
 		{"wrap arg", "node", []string{"wrap", "--", "server.js"}, true},
 		{"mcp-gateway arg", "something", []string{"mcp-gateway"}, true},
 		{"gateway arg", "something", []string{"mcp", "gateway"}, true},

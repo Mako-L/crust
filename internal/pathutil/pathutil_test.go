@@ -477,3 +477,32 @@ func FuzzExpandMSYS2Path(f *testing.F) {
 		}
 	})
 }
+
+func TestHasExtFold(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		ext  string
+		want bool
+	}{
+		{"exact match", "rules.yaml", ".yaml", true},
+		{"upper ext", "rules.YAML", ".yaml", true},
+		{"mixed ext", "rules.Yaml", ".yaml", true},
+		{"upper query", "rules.yaml", ".YAML", true},
+		{"yml not yaml", "rules.yml", ".yaml", false},
+		{"no ext", "Makefile", ".yaml", false},
+		{"empty name", "", ".yaml", false},
+		{"dot only", ".", ".yaml", false},
+		{"nested path", "/home/user/rules.d/custom.YAML", ".yaml", true},
+		{"windows path", `C:\Users\rules.Yaml`, ".yaml", true},
+		{"double ext", "file.tar.YAML", ".yaml", true},
+		{"ext in name", "yaml.txt", ".yaml", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasExtFold(tt.file, tt.ext); got != tt.want {
+				t.Errorf("HasExtFold(%q, %q) = %v, want %v", tt.file, tt.ext, got, tt.want)
+			}
+		})
+	}
+}

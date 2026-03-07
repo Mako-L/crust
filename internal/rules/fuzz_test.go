@@ -483,9 +483,11 @@ func FuzzBuiltinRuleBypass(f *testing.F) {
 			if ruleName, isCritical := criticalPaths[np]; isCritical && !result.Matched {
 				// Only flag for operations the rule actually blocks
 				if info.Operation == OpRead || info.Operation == OpWrite ||
-					info.Operation == OpDelete || info.Operation == OpCopy {
-					t.Errorf("BYPASS: %s(%s) normalized to %q but rule %s did NOT block",
-						toolName, argsJSON, np, ruleName)
+					info.Operation == OpDelete || info.Operation == OpCopy ||
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
+					t.Errorf("BYPASS: %s(%s) normalized to %q but rule %s did NOT block (op=%s)",
+						toolName, argsJSON, np, ruleName, info.Operation)
 				}
 			}
 		}
@@ -1563,7 +1565,9 @@ func FuzzShapeDetectionBypass(f *testing.F) {
 		for _, np := range normalizedPaths {
 			if ruleName, isCritical := criticalPaths[np]; isCritical && !result.Matched {
 				if info.Operation == OpRead || info.Operation == OpWrite ||
-					info.Operation == OpDelete || info.Operation == OpCopy {
+					info.Operation == OpDelete || info.Operation == OpCopy ||
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
 					t.Errorf("SHAPE BYPASS: tool=%s args=%s normalized to %q but rule %s did NOT block (op=%s)",
 						toolName, argsJSON, np, ruleName, info.Operation)
 				}
@@ -2099,7 +2103,8 @@ func FuzzPipeBypass(f *testing.F) {
 			if isCriticalPath(np) && !result.Matched {
 				if info.Operation == OpRead || info.Operation == OpWrite ||
 					info.Operation == OpDelete || info.Operation == OpCopy ||
-					info.Operation == OpMove {
+					info.Operation == OpMove || info.Operation == OpExecute ||
+					info.Operation == OpNetwork {
 					t.Errorf("PIPE BYPASS: command %q → extractor found path %q (op=%s) but engine did NOT block",
 						cmd, np, info.Operation)
 				}

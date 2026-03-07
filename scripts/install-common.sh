@@ -678,6 +678,7 @@ parse_args() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 # Uninstall crust. Pass optional extra paths to remove.
+# shellcheck disable=SC2120 # extra paths are optional
 run_uninstall() {
     print_banner ""
     print_bold "Uninstalling Crust..."

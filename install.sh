@@ -41,6 +41,7 @@ main() {
     parse_args "$@"
 
     if [ -n "$DO_UNINSTALL" ]; then
+        # shellcheck disable=SC2119 # no extra paths to remove for basic uninstall
         run_uninstall
         exit 0
     fi

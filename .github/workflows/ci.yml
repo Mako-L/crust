@@ -283,6 +283,86 @@ jobs:
       - name: ACP E2E tests
         run: go test -race ./internal/acpwrap/... -v -run E2E -timeout 60s
 
+  e2e-install:
+    name: Install & Agent Config E2E
+    needs: [lint-go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and install crust binary from current branch
+        run: |
+          mkdir -p "$HOME/.local/bin" "$HOME/.crust" "$HOME/.crust/rules.d"
+          go build -ldflags "-X main.Version=e2e-test" -o "$HOME/.local/bin/crust" .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify binary works
+        run: crust version
+
+      - name: Create fake OpenClaw config
+        run: |
+          mkdir -p "$HOME/.openclaw"
+          printf '{"baseUrl":"https://api.openai.com","apiKey":"sk-test"}' \
+            > "$HOME/.openclaw/openclaw.json"
+
+      - name: Start crust daemon (auto mode, no upstream required)
+        run: |
+          crust start --auto --no-color
+          # PatchAgentConfigs is called after WritePID; give the daemon a moment
+          sleep 2
+
+      - name: Verify OpenClaw config was patched
+        run: |
+          patched=$(jq -r '.baseUrl' "$HOME/.openclaw/openclaw.json")
+          echo "baseUrl after start: $patched"
+          echo "$patched" | grep -q "localhost:9090" || {
+            echo "ERROR: baseUrl not patched to localhost:9090 (got: $patched)"
+            cat "$HOME/.openclaw/openclaw.json"
+            exit 1
+          }
+          test -f "$HOME/.openclaw/openclaw.json.crust-backup" || {
+            echo "ERROR: backup file missing"
+            exit 1
+          }
+
+      - name: Stop crust daemon
+        run: crust stop
+
+      - name: Verify OpenClaw config was restored
+        run: |
+          restored=$(jq -r '.baseUrl' "$HOME/.openclaw/openclaw.json")
+          echo "baseUrl after stop: $restored"
+          test "$restored" = "https://api.openai.com" || {
+            echo "ERROR: baseUrl not restored (got: $restored)"
+            cat "$HOME/.openclaw/openclaw.json"
+            exit 1
+          }
+          test ! -f "$HOME/.openclaw/openclaw.json.crust-backup" || {
+            echo "ERROR: backup file was not removed after restore"
+            exit 1
+          }
+
+      - name: Uninstall crust
+        run: echo "y" | bash install.sh --uninstall
+
+      - name: Verify uninstall cleaned up
+        run: |
+          test ! -f "$HOME/.local/bin/crust" || { echo "ERROR: binary not removed"; exit 1; }
+          test ! -d "$HOME/.crust"            || { echo "ERROR: data dir not removed"; exit 1; }
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          cat "$HOME/.crust/crust.log" 2>/dev/null || echo "(no log file found)"
+          echo "--- openclaw config ---"
+          cat "$HOME/.openclaw/openclaw.json" 2>/dev/null || echo "(no openclaw config)"
+          echo "--- backup ---"
+          cat "$HOME/.openclaw/openclaw.json.crust-backup" 2>/dev/null || echo "(no backup)"
+
   docker-test:
     name: Docker
     runs-on: ubuntu-latest

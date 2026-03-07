@@ -404,6 +404,42 @@ func TestDLPSecretDetection(t *testing.T) {
 			"Write",
 			`{"file_path":"/home/user/project/.env","content":"FIREBASE_KEY=` + "AAAA" + "ABCDEFG" + ":" + strings.Repeat("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop", 4) + `"}`,
 		},
+		// --- Newer service patterns ---
+		{
+			"DLP: writing PlanetScale token",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"PLANETSCALE_TOKEN=` + "pscale_tkn_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef" + `"}`,
+		},
+		{
+			"DLP: writing Resend API key",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"RESEND_KEY=` + "re_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZab" + `"}`,
+		},
+		{
+			"DLP: writing Fly.io token",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"FLY_TOKEN=` + "fo1_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst" + `"}`,
+		},
+		{
+			"DLP: writing Railway token",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"RAILWAY_TOKEN=` + "railway_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZab" + `"}`,
+		},
+		{
+			"DLP: writing Clerk secret key",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"CLERK_SECRET=` + "sk_live_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZab" + `"}`,
+		},
+		{
+			"DLP: writing Upstash token",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"UPSTASH_TOKEN=` + "AX" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst" + `"}`,
+		},
+		{
+			"DLP: writing Neon token",
+			"Write",
+			`{"file_path":"/home/user/project/.env","content":"NEON_TOKEN=` + "neon_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh" + `"}`,
+		},
 	}
 
 	for _, tc := range cases {

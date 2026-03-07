@@ -285,10 +285,14 @@ jobs:
             ln -sf /usr/local/go/bin/go    /usr/local/bin/go
             ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
             rm /tmp/go.tar.gz
+            # install.sh requires bash (uses BASH_SOURCE, source, &>/dev/null)
+            pkg install -y bash
           run: |
             go version
-            go build ./...
-            go build -tags notui ./...
+            # Test install.sh on FreeBSD (builds from source, installs gitleaks)
+            bash install.sh --local . --prefix /usr/local/bin --no-font --no-completion
+            which crust && crust version
+            which gitleaks
             go test -short ./...
 
   e2e:

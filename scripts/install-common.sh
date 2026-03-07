@@ -351,9 +351,9 @@ ensure_git() {
     esac
 }
 
-# Ensure curl or wget is available; auto-installs curl if missing.
+# Ensure curl, wget, or fetch is available; auto-installs curl if missing.
 ensure_download_tool() {
-    if command -v curl &>/dev/null || command -v wget &>/dev/null; then return 0; fi
+    if command -v curl &>/dev/null || command -v wget &>/dev/null || command -v fetch &>/dev/null; then return 0; fi
 
     info "curl/wget not found — installing curl"
 
@@ -408,6 +408,8 @@ download() {
         curl -fsSL "$url" -o "$output"
     elif command -v wget &>/dev/null; then
         wget -q "$url" -O "$output"
+    elif command -v fetch &>/dev/null; then
+        fetch -q -o "$output" "$url"
     fi
 }
 
@@ -420,6 +422,8 @@ get_latest_version() {
         version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     elif command -v wget &>/dev/null; then
         version=$(wget -qO- "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    elif command -v fetch &>/dev/null; then
+        version=$(fetch -qo - "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     fi
     echo "${version:-main}"
 }

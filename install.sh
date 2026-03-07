@@ -28,8 +28,10 @@ else
         curl -fsSL "https://raw.githubusercontent.com/BakeLens/crust/main/scripts/install-common.sh" -o "$_common_tmp"
     elif command -v wget &>/dev/null; then
         wget -q "https://raw.githubusercontent.com/BakeLens/crust/main/scripts/install-common.sh" -O "$_common_tmp"
+    elif command -v fetch &>/dev/null; then
+        fetch -q -o "$_common_tmp" "https://raw.githubusercontent.com/BakeLens/crust/main/scripts/install-common.sh"
     else
-        echo "Error: curl or wget required" >&2
+        echo "Error: curl, wget, or fetch required" >&2
         exit 1
     fi
     # shellcheck source=/dev/null

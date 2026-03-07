@@ -93,6 +93,33 @@ func TestCryptoDLPDetection(t *testing.T) {
 			wantID:  "builtin:dlp-crypto-wif",
 		},
 
+		// --- Multilingual BIP39 Detection ---
+		{
+			name:    "Spanish 12-word mnemonic",
+			content: "ábaco abdomen abeja abierto abogado abono abrazo abrir abuelo abuso acción aceite",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Japanese 12-word mnemonic",
+			content: "あいこくしん あいさつ あいだ あおぞら あかちゃん あきる あけがた あける あこがれる あさい あさひ あしあと",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Chinese simplified 12-word mnemonic",
+			content: "的 一 是 在 不 了 有 和 人 这 中 大",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Korean 12-word mnemonic",
+			content: "가격 가끔 가난 가능 가득 가르침 가뭄 가방 가상 가슴 가운데 가을",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "French 12-word mnemonic",
+			content: "abaisser abandon abdiquer abeille abolir aborder aboutir aboyer abrasif absence abroger absolu",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+
 		// --- No Detection (clean content) ---
 		{
 			name:    "empty content",
@@ -279,8 +306,21 @@ func TestCryptoWalletPathsOSSpecific(t *testing.T) {
 	}
 }
 
-func TestBIP39WordlistCount(t *testing.T) {
-	if len(bip39Wordlist) != 2048 {
-		t.Errorf("bip39Wordlist has %d words, want 2048", len(bip39Wordlist))
+func TestBIP39UnifiedWordlistCount(t *testing.T) {
+	// 10 languages × 2048 words each, minus overlap between languages.
+	// The unified set should have at least 10,000 unique words.
+	if len(bip39Unified) < 10000 {
+		t.Errorf("bip39Unified has %d words, want >= 10000", len(bip39Unified))
+	}
+	// Each language has exactly 2048 words, so max is 20480.
+	if len(bip39Unified) > 20480 {
+		t.Errorf("bip39Unified has %d words, want <= 20480", len(bip39Unified))
+	}
+	// Spot-check: English "abandon", Spanish "ábaco", Japanese "あいこくしん"
+	spotChecks := []string{"abandon", "zoo", "ábaco", "あいこくしん", "的", "가격"}
+	for _, w := range spotChecks {
+		if !bip39Unified[w] {
+			t.Errorf("bip39Unified missing expected word %q", w)
+		}
 	}
 }

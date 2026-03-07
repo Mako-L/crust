@@ -4724,3 +4724,33 @@ func TestXargs_PathExtraction(t *testing.T) {
 		})
 	}
 }
+
+// TestExpandPercentVars verifies that Windows %VAR% tokens in extracted paths
+// are expanded using the extractor's env map (cross-platform unit test).
+func TestExpandPercentVars(t *testing.T) {
+	ext := NewExtractorWithEnv(map[string]string{
+		"USERPROFILE": `C:\Users\user`,
+		"APPDATA":     `C:\Users\user\AppData\Roaming`,
+	})
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"simple", `%USERPROFILE%/.env`, `C:/Users/user/.env`},
+		{"nested dir", `%APPDATA%/config/settings.ini`, `C:/Users/user/AppData/Roaming/config/settings.ini`},
+		{"unknown var", `%UNKNOWN%/file`, `%UNKNOWN%/file`},
+		{"no percent", `/home/user/.env`, `/home/user/.env`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &ExtractedInfo{Paths: []string{tt.path}}
+			ext.expandPercentVars(info)
+			if info.Paths[0] != tt.want {
+				t.Errorf("expandPercentVars(%q) = %q, want %q", tt.path, info.Paths[0], tt.want)
+			}
+		})
+	}
+}

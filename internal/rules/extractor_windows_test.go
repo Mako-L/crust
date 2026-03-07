@@ -2215,13 +2215,6 @@ func TestExtract_BatchFileExecution(t *testing.T) {
 
 // TestExtract_CmdPercentVarExpansion verifies that %VAR% environment variable
 // syntax used by cmd.exe is expanded using the extractor's env map.
-// Gap: the extractor's env expansion handles $VAR and ${VAR} (bash/PS) but
-// not the %VAR% syntax native to cmd.exe.
-//
-// cmd /c recursion is implemented; %VAR% expansion is not yet implemented.
-// The literal %VAR%/path token appears in Paths until percent-expansion lands.
-// TODO: Once percent-expansion is implemented, assert the resolved paths
-// (e.g. C:\Users\user\.env) instead of the raw %USERPROFILE%\.env tokens.
 func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 	ext := NewExtractorWithEnv(map[string]string{
 		"USERPROFILE": `C:\Users\user`,
@@ -2230,28 +2223,28 @@ func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 	})
 
 	tests := []struct {
-		name        string
-		cmd         string
-		wantOp      Operation
-		wantRawPath string // literal unexpanded token; %VAR% expansion not yet implemented
+		name     string
+		cmd      string
+		wantOp   Operation
+		wantPath string // expanded path (backslashes normalized to /)
 	}{
 		{
-			name:        "type with %USERPROFILE%",
-			cmd:         `cmd /c type %USERPROFILE%\.env`,
-			wantOp:      OpRead,
-			wantRawPath: `%USERPROFILE%/.env`, // backslash normalized to /
+			name:     "type with %USERPROFILE%",
+			cmd:      `cmd /c type %USERPROFILE%\.env`,
+			wantOp:   OpRead,
+			wantPath: `C:/Users/user/.env`,
 		},
 		{
-			name:        "del with %TEMP%",
-			cmd:         `cmd /c del %TEMP%\secret.txt`,
-			wantOp:      OpDelete,
-			wantRawPath: `%TEMP%/secret.txt`,
+			name:     "del with %TEMP%",
+			cmd:      `cmd /c del %TEMP%\secret.txt`,
+			wantOp:   OpDelete,
+			wantPath: `C:/Users/user/AppData/Local/Temp/secret.txt`,
 		},
 		{
-			name:        "copy with %APPDATA%",
-			cmd:         `cmd /c copy %APPDATA%\config.ini C:\tmp\out`,
-			wantOp:      OpCopy,
-			wantRawPath: `%APPDATA%/config.ini`,
+			name:     "copy with %APPDATA%",
+			cmd:      `cmd /c copy %APPDATA%\config.ini C:\tmp\out`,
+			wantOp:   OpCopy,
+			wantPath: `C:/Users/user/AppData/Roaming/config.ini`,
 		},
 	}
 
@@ -2259,13 +2252,11 @@ func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			args, _ := json.Marshal(map[string]string{"command": tt.cmd})
 			info := ext.Extract("Bash", json.RawMessage(args))
-			// cmd /c recursion is implemented; operation check is active.
 			if tt.wantOp != OpNone && info.Operation != tt.wantOp {
 				t.Errorf("Operation = %v, want %v (cmd=%q)", info.Operation, tt.wantOp, tt.cmd)
 			}
-			// Until %VAR% expansion is implemented, assert the raw unexpanded token.
-			if !slices.Contains(info.Paths, tt.wantRawPath) {
-				t.Errorf("raw path %q not found in %v (cmd=%q)", tt.wantRawPath, info.Paths, tt.cmd)
+			if !slices.Contains(info.Paths, tt.wantPath) {
+				t.Errorf("expanded path %q not found in %v (cmd=%q)", tt.wantPath, info.Paths, tt.cmd)
 			}
 		})
 	}

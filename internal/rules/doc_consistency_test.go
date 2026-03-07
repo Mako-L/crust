@@ -55,7 +55,7 @@ func docContains(t *testing.T, relPath, substr string) {
 
 // wantDLPPatternCount is the expected number of hardcoded DLP patterns.
 // Update this constant AND the docs below whenever patterns are added or removed.
-const wantDLPPatternCount = 34
+const wantDLPPatternCount = 42
 
 // Docs that reference the DLP pattern count:
 //   - README.md: "34 DLP token-detection patterns"
@@ -71,7 +71,7 @@ func TestDocConsistency_DLPPatternCount(t *testing.T) {
 			got, wantDLPPatternCount)
 	}
 
-	docContains(t, "README.md", "34 DLP token-detection patterns")
+	docContains(t, "README.md", "42 DLP token-detection patterns")
 }
 
 // ── Dynamic protection rules ─────────────────────────────────────────────────
@@ -107,8 +107,8 @@ func TestDocConsistency_ProtectionRules(t *testing.T) {
 
 const (
 	wantTotalRuleCount      = 27
-	wantLockedRuleCount     = 19
-	wantUserDisablableCount = 8
+	wantLockedRuleCount     = 24
+	wantUserDisablableCount = 3
 )
 
 func TestDocConsistency_BuiltinRuleCounts(t *testing.T) {
@@ -152,8 +152,8 @@ func TestDocConsistency_BuiltinRuleCounts(t *testing.T) {
 
 	// Assert docs reflect the source counts (README uses markdown bold around numbers)
 	docContains(t, "README.md", "27 security rules")
-	docContains(t, "README.md", "19 locked")
-	docContains(t, "README.md", "8 user-disablable")
+	docContains(t, "README.md", "24 locked")
+	docContains(t, "README.md", "3 user-disablable")
 }
 
 // ── CLI commands ──────────────────────────────────────────────────────────────

@@ -769,7 +769,16 @@ func defaultCommandDB() map[string]CommandInfo {
 		"wmic":           {Operation: OpExecute, PathArgIndex: []int{0, 1, 2, 3}},
 		"certutil":       {Operation: OpWrite, PathArgIndex: []int{0, 1, 2, 3}}, // LOLBAS: download+write
 		"bitsadmin":      {Operation: OpNetwork, PathArgIndex: []int{0, 1, 2, 3}},
-		"osascript":      {Operation: OpExecute, PathArgIndex: []int{0}}, // macOS AppleScript
+		"osascript":      {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // macOS AppleScript
+		"nu":             {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Nushell
+		"nushell":        {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Nushell (full name)
+		"elvish":         {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Elvish shell
+		"oil":            {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Oil shell
+		"osh":            {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Oil shell (POSIX mode)
+		"ysh":            {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Oil shell (new syntax)
+		"rc":             {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Plan 9 shell
+		"es":             {Operation: OpExecute, PathArgIndex: []int{0}},                                                                                                                                             // Extensible shell
+		"pwsh-preview":   {Operation: OpExecute, PathFlags: []string{"-File"}, SkipFlags: []string{"-NoProfile", "-NonInteractive", "-NoLogo", "-ExecutionPolicy", "-WindowStyle", "-OutputFormat", "-InputFormat"}}, // PowerShell preview
 
 		// Windows file operations
 		"type":     {Operation: OpRead, PathArgIndex: []int{0, 1, 2}}, // Windows cat equivalent
@@ -1059,6 +1068,12 @@ func (e *Extractor) Extract(toolName string, args json.RawMessage) ExtractedInfo
 	// Catches renamed tools, hidden fields, and MCP tools with standard arg shapes.
 	e.augmentFromArgShape(&info)
 
+	// Expand Windows cmd.exe %VAR% references in extracted paths using the
+	// extractor's env map. normalizeWinPaths already converted backslashes to
+	// forward slashes (%USERPROFILE%\.env → %USERPROFILE%/.env), so we only
+	// need to substitute the %VAR% tokens with their env values.
+	e.expandPercentVars(&info)
+
 	// Ensure Operations is always populated from Operation (for tool extractors
 	// that set info.Operation directly rather than calling addOperation).
 	if info.Operation != OpNone && len(info.Operations) == 0 {
@@ -1341,6 +1356,29 @@ func normalizeWinPaths(cmd string) string {
 	cmd = winBackslashPathRe.ReplaceAllStringFunc(cmd, slash)
 	cmd = winCmdEnvPathRe.ReplaceAllStringFunc(cmd, slash)
 	return cmd
+}
+
+// percentVarRe matches a single %VAR% token (e.g. %USERPROFILE%, %APPDATA%).
+var percentVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z_0-9]*)%`)
+
+// expandPercentVars replaces Windows cmd.exe %VAR% tokens in extracted paths
+// with values from the extractor's env map. Unresolved tokens are left as-is.
+func (e *Extractor) expandPercentVars(info *ExtractedInfo) {
+	if len(e.env) == 0 {
+		return
+	}
+	for i, p := range info.Paths {
+		if !strings.Contains(p, "%") {
+			continue
+		}
+		info.Paths[i] = percentVarRe.ReplaceAllStringFunc(p, func(match string) string {
+			varName := match[1 : len(match)-1] // strip surrounding %
+			if val, ok := e.env[varName]; ok {
+				return strings.ReplaceAll(val, `\`, `/`)
+			}
+			return match
+		})
+	}
 }
 
 // substitutePSVariables finds PowerShell $var=value assignments and replaces

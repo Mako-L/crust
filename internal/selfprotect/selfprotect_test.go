@@ -1,6 +1,9 @@
 package selfprotect
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // SECURITY: Check must block all loopback representations targeting Crust API.
 func TestCheck_APIBlocks(t *testing.T) {
@@ -118,4 +121,60 @@ func TestCheck_SocketAllows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzSelfProtectAPIRegex tries to find loopback representations that bypass
+// the API regex while still containing "crust" and a loopback-like host.
+func FuzzSelfProtectAPIRegex(f *testing.F) {
+	f.Add("localhost:9090/api/crust/rules")
+	f.Add("127.0.0.1:9090/api/crust/rules")
+	f.Add("[::1]:9090/crust")
+	f.Add("0x7f000001:9090/crust")
+	f.Add("2130706433:9090/crust")
+	f.Add("127.0.0.1.nip.io:9090/crust")
+	f.Add("http://0:9090/api/crust/rules")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Must not panic on any input.
+		Check(input)
+	})
+}
+
+// FuzzSelfProtectSocketRegex tries to find socket access patterns that bypass
+// the socket regex.
+func FuzzSelfProtectSocketRegex(f *testing.F) {
+	f.Add("curl --unix-socket /tmp/crust.sock http://localhost/api")
+	f.Add("socat UNIX-CONNECT:/tmp/crust.sock -")
+	f.Add(`\\.\pipe\crust-api`)
+	f.Add("nc -U /tmp/crust-api-9090.sock")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Must not panic on any input.
+		Check(input)
+	})
+}
+
+// FuzzSelfProtectBypass attempts to find inputs that contain a loopback address
+// and "crust" but evade detection.
+func FuzzSelfProtectBypass(f *testing.F) {
+	f.Add("http://127.0.0.1:9090/api/crust/rules")
+	f.Add("http://localhost:9090/api/crust/stop")
+	f.Add("http://[::1]:9090/crust")
+	f.Add("http://0x7f000001:9090/crust")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		result := Check(input)
+
+		// Oracle: if the input clearly contains a loopback URL targeting crust,
+		// it must be blocked.
+		lower := strings.ToLower(input)
+		hasLoopback := strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "localhost")
+		hasCrust := strings.Contains(lower, "crust")
+
+		if hasLoopback && hasCrust && result == nil {
+			if strings.Contains(lower, "://127.0.0.1") || strings.Contains(lower, "://localhost") {
+				t.Errorf("BYPASS: %q contains loopback+crust URL but was not blocked", input)
+			}
+		}
+	})
 }

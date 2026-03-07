@@ -110,13 +110,13 @@ func TestLockedRulesSurviveDisableBuiltin(t *testing.T) {
 		"block-ssrf-metadata",
 		"protect-agent-config",
 		"protect-git-hooks",
-	}
-	unlockedNames := []string{
 		"protect-env-files",
 		"protect-browser-data",
 		"protect-package-tokens",
 		"protect-shell-rc",
 		"protect-github-cli",
+	}
+	unlockedNames := []string{
 		"detect-private-key-write",
 		"block-eval-exec",
 		"protect-vscode-settings",

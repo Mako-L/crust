@@ -445,10 +445,7 @@ jobs:
       - name: Uninstall crust
         shell: pwsh
         run: |
-          # Pre-remove data dir so install.ps1 -Uninstall runs without interactive prompt
-          $dataDir = Join-Path $env:USERPROFILE ".crust"
-          Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-          & "$env:GITHUB_WORKSPACE\install.ps1" -Uninstall
+          & "$env:GITHUB_WORKSPACE\install.ps1" -Uninstall -Force
 
       - name: Verify uninstall cleaned up
         shell: pwsh

@@ -2118,8 +2118,17 @@ func FuzzPipeBypass(f *testing.F) {
 			// Left must be "echo /abs/path" (no chains, no subshells)
 			if strings.HasPrefix(left, "echo ") && !strings.ContainsAny(left, ";|&(){}$`#") {
 				echoArg := strings.TrimSpace(left[5:])
-				// Only check absolute paths to avoid relative-path normalization issues
-				if strings.HasPrefix(echoArg, "/") {
+				// Strip common echo flags (-n, -e, -E) before checking
+				for strings.HasPrefix(echoArg, "-") {
+					if sp := strings.IndexByte(echoArg, ' '); sp > 0 {
+						echoArg = strings.TrimSpace(echoArg[sp+1:])
+					} else {
+						break
+					}
+				}
+				// Only check single absolute paths — multi-word echo args produce
+				// multiple xargs arguments and normalizing them as one path is wrong.
+				if strings.HasPrefix(echoArg, "/") && !strings.ContainsRune(echoArg, ' ') {
 					normalized := normalizer.Normalize(echoArg)
 					if isCriticalPath(normalized) {
 						// Get the wrapped command (first word after xargs)

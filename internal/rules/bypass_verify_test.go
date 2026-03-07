@@ -802,7 +802,7 @@ func TestBypassFix_SymlinkMatching(t *testing.T) {
 			Block: Block{
 				Paths: []string{"/etc/passwd"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "Cannot access /etc/passwd",
 			Severity: SeverityCritical,
 		},
@@ -811,7 +811,7 @@ func TestBypassFix_SymlinkMatching(t *testing.T) {
 			Block: Block{
 				Paths: []string{"/private/etc/passwd"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "Cannot access /private/etc/passwd",
 			Severity: SeverityCritical,
 		},

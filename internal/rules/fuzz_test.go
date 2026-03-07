@@ -156,7 +156,7 @@ func FuzzEngineBypass(f *testing.F) {
 			Block: Block{
 				Paths: []string{"/etc/passwd", "/etc/shadow"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove, OpExecute},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "blocked",
 			Severity: SeverityCritical,
 			Source:   SourceBuiltin,
@@ -167,7 +167,7 @@ func FuzzEngineBypass(f *testing.F) {
 				Paths:  []string{"/home/user/.ssh/id_*", "/home/user/.ssh/authorized_keys"},
 				Except: []string{"/home/user/.ssh/id_*.pub"},
 			},
-			Actions:  []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove},
+			Actions:  []Operation{OpRead, OpExecute, OpWrite, OpDelete, OpCopy, OpMove, OpNetwork},
 			Message:  "blocked",
 			Severity: SeverityCritical,
 			Source:   SourceBuiltin,

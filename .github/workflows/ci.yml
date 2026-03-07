@@ -93,33 +93,53 @@ jobs:
 
       - name: Fuzz tests (full suite, 10s each — parallelized)
         run: |
-          # Run full suite in parallel batches (4 at a time) to cut wall time.
+          # Run full suite in parallel batches (2 at a time) to cut wall time
+          # while keeping enough CPU per fuzzer for meaningful coverage.
           # Each fuzz target gets its own process so failures are isolated.
           parallel_fuzz() {
             local bin="$1"; shift
             local pids=()
+            local targets=()
+            local failed=0
             for target in "$@"; do
               "$bin" -test.fuzz="$target" -test.fuzztime=10s -test.short &
               pids+=($!)
-              # Cap concurrency at 4 to avoid starving the fuzzer of CPU.
-              if [ "${#pids[@]}" -ge 4 ]; then
-                for p in "${pids[@]}"; do wait "$p" || exit 1; done
+              targets+=("$target")
+              # Cap concurrency at 2 for better per-target CPU utilization.
+              if [ "${#pids[@]}" -ge 2 ]; then
+                for i in "${!pids[@]}"; do
+                  if ! wait "${pids[$i]}"; then
+                    echo "::error::Fuzz target ${targets[$i]} FAILED"
+                    failed=1
+                  fi
+                done
                 pids=()
+                targets=()
               fi
             done
-            for p in "${pids[@]}"; do wait "$p" || exit 1; done
+            for i in "${!pids[@]}"; do
+              if ! wait "${pids[$i]}"; then
+                echo "::error::Fuzz target ${targets[$i]} FAILED"
+                failed=1
+              fi
+            done
+            return $failed
           }
+          rc=0
           parallel_fuzz /tmp/rules.fuzz \
             FuzzNormalizerBypass FuzzParseShellCommands FuzzMatcherConsistency \
             FuzzExtractBashCommand FuzzIsSuspiciousInput FuzzContainsObfuscation \
             FuzzForkBombDetection FuzzCommandRegexBypass FuzzHostRegexBypass \
             FuzzJSONUnicodeEscapeBypass FuzzEvasionDetectionBypass FuzzGlobCommandBypass \
             FuzzPipelineExtraction FuzzContentConfusableBypass FuzzVariableExpansionEvasion \
-            FuzzShapeDetectionBypass FuzzWebSearchURLBypass FuzzNormalAgentFalsePositive
+            FuzzShapeDetectionBypass FuzzWebSearchURLBypass FuzzNormalAgentFalsePositive \
+            || rc=1
           parallel_fuzz /tmp/httpproxy.fuzz \
             FuzzParseSSEEventData FuzzCopyHeaders FuzzStripHopByHopHeaders \
             FuzzParseAnthropicEvent FuzzParseOpenAIEvent FuzzParseEvent \
-            FuzzApplyResultToToolCalls
+            FuzzApplyResultToToolCalls \
+            || rc=1
+          exit $rc
 
   test:
     name: Go Test (${{ matrix.os }})

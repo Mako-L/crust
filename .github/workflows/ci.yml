@@ -228,7 +228,12 @@ jobs:
           release: '15.0'
           usesh: true
           prepare: |
-            pkg install -y go
+            # FreeBSD ports ships Go 1.25 — install 1.26.1 directly to match go.mod
+            fetch -o /tmp/go.tar.gz https://dl.google.com/go/go1.26.1.freebsd-amd64.tar.gz
+            tar -C /usr/local -xzf /tmp/go.tar.gz
+            ln -sf /usr/local/go/bin/go    /usr/local/bin/go
+            ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+            rm /tmp/go.tar.gz
           run: |
             go version
             go build ./...

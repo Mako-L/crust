@@ -65,6 +65,7 @@ func TestBuiltinRulesLoad(t *testing.T) {
 		"detect-reverse-shell",
 		"block-ssrf-metadata",
 		"protect-agent-config",
+		"protect-vscode-settings",
 		"protect-git-hooks",
 	}
 
@@ -118,6 +119,7 @@ func TestLockedRulesSurviveDisableBuiltin(t *testing.T) {
 		"protect-github-cli",
 		"detect-private-key-write",
 		"block-eval-exec",
+		"protect-vscode-settings",
 	}
 
 	for _, r := range rules {

@@ -94,8 +94,8 @@ extractBashCommand (Windows path)
  └─ 3. Results merged: paths/hosts union, highest-severity operation wins
 ```
 
-**pwsh worker** (`pwsh/worker.go`): a persistent `pwsh.exe` (PS 7+, preferred) or `powershell.exe` (5.1, always present on Windows 10/11) subprocess. The bootstrap script uses `[System.Management.Automation.Language.Parser]::ParseInput()` — a pure AST parser, never executes commands. JSON over stdin/stdout; auto-restarts on crash.
+**pwsh worker pool** (`pwsh/pool.go`, `pwsh/worker.go`): a pool of `pwsh.exe` (PS 7+, preferred) or `powershell.exe` (5.1) subprocesses — up to `min(GOMAXPROCS, 4)` workers for concurrent parsing. The bootstrap script uses `[System.Management.Automation.Language.Parser]::ParseInput()` — a pure AST parser, never executes commands. JSON over stdin/stdout; workers auto-restart on crash. `$env:VAR` references in both quoted and unquoted arguments are resolved via `[System.Environment]::GetEnvironmentVariable`.
 
-**Fallback** (no pwsh worker): heuristic `substitutePSVariables` + `normalizePSBackslashPaths` pre-processing before bash parsing, gated behind `runtime.GOOS == "windows"`.
+**Fallback** (no pwsh worker): heuristic `substitutePSVariables` + `normalizeWinPaths` pre-processing before bash parsing, gated behind `ShellEnvironment().HasPwsh()` (native Windows and MSYS2/Git Bash).
 
-**Evasion**: a PS-looking command that crashes the worker subprocess is blocked as evasive (fail-closed). A command with PS parse errors but valid bash syntax is allowed — bash extraction stands.
+**Evasion**: a PS-looking command that crashes or times out a pool worker is blocked as evasive (fail-closed). A command with PS parse errors but valid bash syntax is allowed — bash extraction stands.

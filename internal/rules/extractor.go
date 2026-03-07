@@ -238,10 +238,11 @@ func (e *Extractor) EnableSubprocessIsolation(exePath string) error {
 	return nil
 }
 
-// EnablePSWorker starts a persistent pwsh subprocess for accurate PowerShell
-// command analysis. pwshPath must be the path to pwsh.exe or powershell.exe.
-// Only call this on Windows — the subprocess is real, not a no-op. The call
-// site in engine.go is gated behind runtime.GOOS == "windows". Falls back to
+// EnablePSWorker starts a pool of pwsh worker subprocesses for accurate
+// PowerShell command analysis. pwshPath must be the path to pwsh.exe or
+// powershell.exe. Only call this on Windows (GOOS=windows covers both native
+// and MSYS2/Cygwin) — the subprocesses are real, not no-ops. The call site
+// in engine.go is gated behind runtime.GOOS == "windows". Falls back to
 // the heuristic PS transform if this method is not called or returns an error.
 func (e *Extractor) EnablePSWorker(pwshPath string) error {
 	pool, err := pwsh.NewWorkerPool(pwshPath, 0) // 0 = auto-size
@@ -1201,8 +1202,8 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 		if e.pwshWorker != nil && looksLikePowerShell(rawCmd) {
 			psResp, psErr := e.pwshWorker.Parse(rawCmd)
 			if psErr != nil {
-				// IPC failure means the PS subprocess crashed while parsing this
-				// command. That is suspicious for a PS-looking command — block it
+				// IPC failure means a pool worker crashed or timed out while parsing
+				// this command. That is suspicious for a PS-looking command — block it
 				// rather than silently ignoring the analysis gap.
 				info.Evasive = true
 				info.EvasiveReason = "pwsh worker crashed parsing command: " + psErr.Error()

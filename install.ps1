@@ -18,7 +18,10 @@
     Skip Nerd Font installation.
 
 .PARAMETER Uninstall
-    Uninstall crust completely.
+    Uninstall crust (keeps rules, config, secrets, DB).
+
+.PARAMETER Purge
+    Uninstall crust and delete all data including DB.
 
 .PARAMETER Help
     Show usage help.
@@ -35,6 +38,7 @@ param(
     [switch]$NoTUI,
     [switch]$NoFont,
     [switch]$Uninstall,
+    [switch]$Purge,
     [Alias("h")]
     [switch]$Help
 )
@@ -318,10 +322,13 @@ if ($Help) {
     Write-Host "  -Version <ver>   Install specific version or branch (e.g. v2.0.0, main)"
     Write-Host "  -NoTUI           Build without TUI dependencies (plain text only)"
     Write-Host "  -NoFont          Skip Nerd Font installation"
-    Write-Host "  -Uninstall       Uninstall crust completely"
+    Write-Host "  -Uninstall       Uninstall crust (keeps rules, config, secrets, DB)"
+    Write-Host "  -Purge           Uninstall crust and delete all data including DB"
     Write-Host "  -Help, -h        Show this help"
     exit 0
 }
+
+if ($Purge) { $Uninstall = $true }
 
 if ($Uninstall) {
     Write-Banner
@@ -367,12 +374,12 @@ if ($Uninstall) {
         Get-ChildItem $DataDir -Filter "crust-api-*.sock" -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
 
-        # ── Telemetry database (prompt) ───────────────────────────────────────
+        # ── Telemetry database (purge=delete, interactive=prompt, else keep) ────
         $dbPath = Join-Path $DataDir "crust.db"
         if (Test-Path $dbPath) {
-            $confirm = if ($PlainMode) { 'y' } else {
-                Read-Host "  Remove telemetry database ($dbPath)? [y/N]"
-            }
+            $confirm = if ($Purge) { 'y' }
+                       elseif (-not $PlainMode) { Read-Host "  Remove telemetry database ($dbPath)? [y/N]" }
+                       else { 'n' }
             if ($confirm -eq 'y' -or $confirm -eq 'Y') {
                 Remove-Item $dbPath -Force -ErrorAction SilentlyContinue
                 Write-Ok "Telemetry database removed"

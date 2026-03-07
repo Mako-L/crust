@@ -595,6 +595,7 @@ parse_args() {
     VERSION="latest"
     BUILD_TAGS=""
     DO_UNINSTALL=""
+    DO_PURGE=""
     SKIP_FONT=""
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -616,6 +617,13 @@ parse_args() {
                 DO_UNINSTALL="1"
                 shift
                 ;;
+            --purge)
+                # shellcheck disable=SC2034
+                DO_UNINSTALL="1"
+                # shellcheck disable=SC2034
+                DO_PURGE="1"
+                shift
+                ;;
             --help|-h)
                 echo "Crust Installer"
                 echo ""
@@ -623,7 +631,8 @@ parse_args() {
                 echo "  --version, -v    Install specific version or branch (e.g. v2.0.0, main)"
                 echo "  --no-tui         Build without TUI dependencies (plain text only)"
                 echo "  --no-font        Skip Nerd Font installation"
-                echo "  --uninstall      Uninstall crust completely"
+                echo "  --uninstall      Uninstall crust (keeps rules, config, secrets, DB)"
+                echo "  --purge          Uninstall crust and delete all data including DB"
                 echo "  --help, -h       Show this help"
                 exit 0
                 ;;
@@ -675,12 +684,12 @@ run_uninstall() {
         rm -f "$DATA_DIR/crust.pid" "$DATA_DIR/crust.port" "$DATA_DIR/crust.log"
         rm -f "$DATA_DIR"/crust-api-*.sock
 
-        # ── Telemetry database (prompt) ───────────────────────────────────────
+        # ── Telemetry database (purge=delete, interactive=prompt, else keep) ────
         if [ -f "$DATA_DIR/crust.db" ]; then
-            local confirm_db
-            if [ "$_PLAIN" = "1" ]; then
+            local confirm_db=""
+            if [ "${DO_PURGE:-}" = "1" ]; then
                 confirm_db="y"
-            else
+            elif [ "$_PLAIN" = "0" ]; then
                 echo -e "  ${YELLOW}Remove telemetry database ($DATA_DIR/crust.db)?${NC}"
                 echo "  This contains your request history and security event data."
                 read -r -p "  Remove? [y/N] " confirm_db

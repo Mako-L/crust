@@ -355,7 +355,7 @@ jobs:
           }
 
       - name: Uninstall crust
-        run: bash install.sh --uninstall
+        run: bash install.sh --purge
 
       - name: Verify uninstall cleaned up
         run: |
@@ -460,7 +460,7 @@ jobs:
       - name: Uninstall crust
         shell: pwsh
         run: |
-          & "$env:GITHUB_WORKSPACE\install.ps1" -Uninstall
+          & "$env:GITHUB_WORKSPACE\install.ps1" -Purge
 
       - name: Verify uninstall cleaned up
         shell: pwsh

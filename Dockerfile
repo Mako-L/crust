@@ -4,7 +4,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -ldflags "-s -w" -o /usr/local/bin/crust .
+RUN go build -ldflags "-s -w" -o /usr/local/bin/crust . && \
+    go install github.com/zricethezav/gitleaks/v8@v8.30.0
 
 FROM debian:bookworm-slim
 
@@ -12,9 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 crust && \
-    mkdir -p /home/crust/.crust && chown crust:crust /home/crust/.crust
+    mkdir -p /home/crust/.crust/rules.d && chown -R crust:crust /home/crust/.crust
 
 COPY --from=builder /usr/local/bin/crust /usr/local/bin/crust
+COPY --from=builder /go/bin/gitleaks /usr/local/bin/gitleaks
 
 USER crust
 WORKDIR /home/crust

@@ -155,9 +155,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install gitleaks (DLP dependency)
-        shell: bash
+      - name: Install gitleaks (DLP dependency, Linux)
+        if: matrix.os != 'windows-latest'
         run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
+
+      - name: Install gitleaks (DLP dependency, Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
       - name: Build (default + notui)
         run: |
@@ -223,10 +230,16 @@ jobs:
           update: false
           path-type: inherit  # inherit Windows PATH so the Go toolchain is visible
 
-      - name: Install gitleaks (DLP dependency)
-        if: github.ref == 'refs/heads/main'
-        shell: bash
+      - name: Install gitleaks (DLP dependency, macOS)
+        if: github.ref == 'refs/heads/main' && !matrix.msys2
         run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
+
+      - name: Install gitleaks (DLP dependency, Windows MSYS2)
+        if: github.ref == 'refs/heads/main' && matrix.msys2
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
       - name: Build
         if: github.ref == 'refs/heads/main' && !matrix.msys2
@@ -318,6 +331,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install gitleaks (DLP dependency)
+        run: INSTALL_DIR="$(go env GOPATH)/bin" source scripts/install-common.sh && setup_gitleaks
+
       - name: Build and install crust binary from current branch
         run: |
           mkdir -p "$HOME/.local/bin" "$HOME/.crust" "$HOME/.crust/rules.d"
@@ -406,6 +422,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Install gitleaks (DLP dependency)
+        shell: pwsh
+        run: |
+          . .\install.ps1 -SourceOnly
+          Install-Gitleaks
 
       - name: Build and install crust binary from current branch
         shell: pwsh

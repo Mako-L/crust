@@ -39,6 +39,7 @@ param(
     [switch]$NoFont,
     [switch]$Uninstall,
     [switch]$Purge,
+    [switch]$SourceOnly,
     [Alias("h")]
     [switch]$Help
 )
@@ -316,6 +317,11 @@ function Install-NerdFont {
         Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
     }
 }
+
+# ─── Source-only mode ─────────────────────────────────────────────────────
+# When dot-sourced with -SourceOnly, export functions without running main.
+# Usage: . .\install.ps1 -SourceOnly; Install-Gitleaks
+if ($SourceOnly) { return }
 
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 if ($Help) {

@@ -509,8 +509,10 @@ rules:
   - name: protect-vscode-settings
     block:
       - "**/.vscode/settings.json"
+      - "**/.vscode/launch.json"
+      - "**/.vscode/tasks.json"
     actions: [write, delete]
-    message: "Blocked: .vscode/settings.json can be abused to auto-approve commands or point to malicious executables (CVE-2025-53773, CVE-2025-54130). Disable this rule if your agent needs to edit VS Code settings."
+    message: "Blocked: .vscode config files can be abused to auto-approve commands, specify malicious executables, or define arbitrary shell tasks (CVE-2025-53773, CVE-2025-54130). Disable this rule if your agent needs to edit VS Code settings."
     severity: high
 
   # ===========================================================================

@@ -84,6 +84,9 @@ type Engine struct {
 	// Pre-checker runs before the evaluation pipeline (e.g., self-protection).
 	preChecker func(rawJSON string) *MatchResult
 
+	// Close guard
+	closeOnce sync.Once
+
 	// Callbacks for reload notifications
 	onReloadCallbacks []ReloadCallback
 }
@@ -830,11 +833,13 @@ func CountLockedBuiltinRules() int {
 }
 
 // Close releases resources held by the engine (e.g. the PowerShell worker
-// pool). It is safe to call multiple times.
+// pool). It is safe to call concurrently and multiple times.
 func (e *Engine) Close() {
-	if e.extractor != nil {
-		e.extractor.Close()
-	}
+	e.closeOnce.Do(func() {
+		if e.extractor != nil {
+			e.extractor.Close()
+		}
+	})
 }
 
 // GetLoader returns the rule loader

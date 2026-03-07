@@ -7,7 +7,7 @@ import (
 	"github.com/BakeLens/crust/internal/pathutil"
 )
 
-// TestBuiltinRulesLoad verifies all 21 builtin security rules can be loaded.
+// TestBuiltinRulesLoad verifies all 24 builtin security rules can be loaded.
 // Tests rule: protect-env-files
 // Tests rule: protect-ssh-keys
 // Tests rule: protect-system-auth

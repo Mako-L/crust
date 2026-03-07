@@ -18,6 +18,7 @@ func newBuiltinEngine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatalf("Failed to create builtin engine: %v", err)
 	}
+	t.Cleanup(engine.Close)
 	return engine
 }
 

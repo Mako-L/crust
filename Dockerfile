@@ -4,8 +4,16 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -ldflags "-s -w" -o /usr/local/bin/crust . && \
-    go install github.com/zricethezav/gitleaks/v8@v8.30.0
+
+# Use the install script in non-interactive mode:
+# --local .        build from copied source (skip git clone)
+# --prefix         install to /usr/local/bin
+# --data-dir       pre-create data directory
+# --no-font        no Nerd Font in containers
+# --no-completion  no shell completion in containers
+ENV CI=true
+RUN bash install.sh --local . --prefix /usr/local/bin --data-dir /tmp/crust-data \
+    --no-font --no-completion --no-tui
 
 FROM debian:bookworm-slim
 
@@ -16,7 +24,7 @@ RUN useradd -m -u 1000 crust && \
     mkdir -p /home/crust/.crust/rules.d && chown -R crust:crust /home/crust/.crust
 
 COPY --from=builder /usr/local/bin/crust /usr/local/bin/crust
-COPY --from=builder /go/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=builder /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 
 USER crust
 WORKDIR /home/crust

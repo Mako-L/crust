@@ -31,11 +31,19 @@ ICON_DIAMOND="◆"  # U+25C6  (brand prefix)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 GITHUB_REPO="BakeLens/crust"
-INSTALL_DIR="$HOME/.local/bin"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="crust"
-DATA_DIR="$HOME/.crust"
+DATA_DIR="${DATA_DIR:-$HOME/.crust}"
 GO_MIN_VERSION="1.26.1"
 GO_DL_BASE="https://dl.google.com/go"
+# Gitleaks version — single source of truth is GITLEAKS_VERSION at repo root.
+# When piped via curl the file isn't available, so we embed a default here.
+GITLEAKS_VERSION="v8.30.0"
+if [ -f "${SCRIPT_DIR:-}/GITLEAKS_VERSION" ]; then
+    GITLEAKS_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/GITLEAKS_VERSION")"
+elif [ -f "${SCRIPT_DIR:-}/../GITLEAKS_VERSION" ]; then
+    GITLEAKS_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../GITLEAKS_VERSION")"
+fi
 
 # ─── Step counter & progress bar ─────────────────────────────────────────────
 _STEP_N=0
@@ -500,6 +508,7 @@ setup_data_dir() {
 }
 
 setup_completion() {
+    if [ -n "${SKIP_COMPLETION:-}" ]; then return 0; fi
     if "$INSTALL_DIR/$BINARY_NAME" completion --install >/dev/null 2>&1; then
         ok "Shell completion installed — restart your shell to activate"
     else
@@ -526,11 +535,11 @@ setup_gitleaks() {
 
     spinner_start "Installing gitleaks via go install"
     # Install directly into INSTALL_DIR so it lands on PATH alongside crust.
-    if GOBIN="$INSTALL_DIR" go install github.com/zricethezav/gitleaks/v8@v8.30.0 >/dev/null 2>&1; then
+    if GOBIN="$INSTALL_DIR" go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}" >/dev/null 2>&1; then
         spinner_ok "gitleaks installed"
         return 0
     fi
-    spinner_fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@v8.30.0"
+    spinner_fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
 }
 
 # Install Cascadia Mono NF from Nerd Fonts (optional, non-fatal).
@@ -589,17 +598,32 @@ setup_path_hint() {
 
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
-# Sets VERSION, BUILD_TAGS, DO_UNINSTALL, SKIP_FONT globals.
+# Sets VERSION, BUILD_TAGS, DO_UNINSTALL, SKIP_FONT, LOCAL_SRC globals.
 parse_args() {
     VERSION="latest"
     BUILD_TAGS=""
     DO_UNINSTALL=""
     DO_PURGE=""
     SKIP_FONT=""
+    SKIP_COMPLETION=""
+    LOCAL_SRC=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             --version|-v)
                 VERSION="$2"
+                shift 2
+                ;;
+            --prefix)
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --data-dir)
+                DATA_DIR="$2"
+                shift 2
+                ;;
+            --local)
+                # shellcheck disable=SC2034
+                LOCAL_SRC="$2"
                 shift 2
                 ;;
             --no-tui)
@@ -609,6 +633,10 @@ parse_args() {
                 ;;
             --no-font)
                 SKIP_FONT="1"
+                shift
+                ;;
+            --no-completion)
+                SKIP_COMPLETION="1"
                 shift
                 ;;
             --uninstall)
@@ -627,12 +655,16 @@ parse_args() {
                 echo "Crust Installer"
                 echo ""
                 echo "Options:"
-                echo "  --version, -v    Install specific version or branch (e.g. v2.0.0, main)"
-                echo "  --no-tui         Build without TUI dependencies (plain text only)"
-                echo "  --no-font        Skip Nerd Font installation"
-                echo "  --uninstall      Uninstall crust (keeps rules, config, secrets, DB)"
-                echo "  --purge          Uninstall crust and delete all data including DB"
-                echo "  --help, -h       Show this help"
+                echo "  --version, -v      Install specific version or branch (e.g. v2.0.0, main)"
+                echo "  --prefix <dir>     Install binary to <dir> (default: ~/.local/bin)"
+                echo "  --data-dir <dir>   Data directory (default: ~/.crust)"
+                echo "  --local <dir>      Build from local source directory (skip clone)"
+                echo "  --no-tui           Build without TUI dependencies (plain text only)"
+                echo "  --no-font          Skip Nerd Font installation"
+                echo "  --no-completion    Skip shell completion installation"
+                echo "  --uninstall        Uninstall crust (keeps rules, config, secrets, DB)"
+                echo "  --purge            Uninstall crust and delete all data including DB"
+                echo "  --help, -h         Show this help"
                 exit 0
                 ;;
             *)

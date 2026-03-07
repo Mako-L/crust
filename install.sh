@@ -10,6 +10,9 @@
 #   curl -fsSL .../install.sh | bash -s -- --version v2.0.0
 #   curl -fsSL .../install.sh | bash -s -- --no-tui
 #
+# Non-interactive (Docker/CI):
+#   bash install.sh --local . --prefix /usr/local/bin --no-font --no-completion
+#
 
 set -e
 
@@ -43,35 +46,65 @@ main() {
     fi
 
     print_banner ""
-    init_steps 7
 
-    step "Detecting system"
-    detect_platform
+    if [ -n "$LOCAL_SRC" ]; then
+        # Local build mode: skip clone, build from local source directory.
+        # Useful for Docker, CI, or development installs.
+        init_steps 5
 
-    step "Checking requirements"
-    check_requirements "go"
+        step "Detecting system"
+        detect_platform
 
-    step "Fetching version"
-    resolve_version
+        step "Checking requirements"
+        check_requirements "go"
 
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
+        step "Building Crust"
+        local build_version="$VERSION"
+        if [ "$build_version" = "latest" ]; then
+            # Try to detect version from git tags in local source
+            build_version=$(git -C "$LOCAL_SRC" describe --tags --always 2>/dev/null || echo "dev")
+        fi
+        build_go_binary "$LOCAL_SRC" "$build_version"
 
-    step "Cloning repository"
-    clone_repo "$VERSION" "$tmp_dir/crust"
+        step "Installing"
+        install_go_binary "$LOCAL_SRC"
+        setup_data_dir
 
-    step "Building Crust"
-    build_go_binary "$tmp_dir/crust" "$VERSION"
+        step "Finalizing"
+        setup_completion
+        setup_gitleaks
+        setup_font
+    else
+        init_steps 7
 
-    step "Installing"
-    install_go_binary "$tmp_dir/crust"
-    setup_data_dir
+        step "Detecting system"
+        detect_platform
 
-    step "Finalizing"
-    setup_completion
-    setup_gitleaks
-    setup_font
+        step "Checking requirements"
+        check_requirements "go"
+
+        step "Fetching version"
+        resolve_version
+
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        trap 'rm -rf "$tmp_dir"' EXIT
+
+        step "Cloning repository"
+        clone_repo "$VERSION" "$tmp_dir/crust"
+
+        step "Building Crust"
+        build_go_binary "$tmp_dir/crust" "$VERSION"
+
+        step "Installing"
+        install_go_binary "$tmp_dir/crust"
+        setup_data_dir
+
+        step "Finalizing"
+        setup_completion
+        setup_gitleaks
+        setup_font
+    fi
 
     echo ""
     if [ "${_PLAIN:-0}" = "1" ]; then

@@ -259,15 +259,19 @@ function Install-Gitleaks {
         Write-Ok "gitleaks already installed"
         return
     }
-    Write-Running "Installing gitleaks via go install"
+    # Read version from GITLEAKS_VERSION (single source of truth)
+    $glVer = "v8.30.0"
+    $glVerFile = Join-Path $PSScriptRoot "GITLEAKS_VERSION"
+    if (Test-Path $glVerFile) { $glVer = (Get-Content $glVerFile -Raw).Trim() }
+    Write-Running "Installing gitleaks $glVer via go install"
     try {
-        $null = & go install github.com/zricethezav/gitleaks/v8@v8.30.0 2>&1
+        $null = & go install "github.com/zricethezav/gitleaks/v8@$glVer" 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "gitleaks installed"
             return
         }
     } catch {}
-    Write-Fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@v8.30.0"
+    Write-Fail "gitleaks install failed — required for DLP secret detection. Install manually: go install github.com/zricethezav/gitleaks/v8@$glVer"
 }
 
 function Install-NerdFont {

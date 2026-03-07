@@ -35,7 +35,6 @@ param(
     [switch]$NoTUI,
     [switch]$NoFont,
     [switch]$Uninstall,
-    [switch]$Force,   # auto-confirm all prompts during uninstall (for CI/scripted use)
     [Alias("h")]
     [switch]$Help
 )
@@ -316,7 +315,6 @@ if ($Help) {
     Write-Host "  -NoTUI           Build without TUI dependencies (plain text only)"
     Write-Host "  -NoFont          Skip Nerd Font installation"
     Write-Host "  -Uninstall       Uninstall crust completely"
-    Write-Host "  -Force           Auto-confirm all prompts (for scripted/CI use)"
     Write-Host "  -Help, -h        Show this help"
     exit 0
 }
@@ -356,7 +354,7 @@ if ($Uninstall) {
 
     if (Test-Path $DataDir) {
         Write-Host ""
-        $confirm = if ($Force) { 'y' } else { Read-Host "  Remove data directory ($DataDir)? [y/N]" }
+        $confirm = if ($PlainMode) { 'y' } else { Read-Host "  Remove data directory ($DataDir)? [y/N]" }
         if ($confirm -eq 'y' -or $confirm -eq 'Y') {
             Remove-Item $DataDir -Recurse -Force
             Write-Ok "Data directory removed"

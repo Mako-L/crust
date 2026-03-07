@@ -445,7 +445,7 @@ jobs:
       - name: Uninstall crust
         shell: pwsh
         run: |
-          & "$env:GITHUB_WORKSPACE\install.ps1" -Uninstall -Force
+          & "$env:GITHUB_WORKSPACE\install.ps1" -Uninstall
 
       - name: Verify uninstall cleaned up
         shell: pwsh

@@ -251,7 +251,7 @@ func (g *HTTPGateway) proxyJSONResponse(w http.ResponseWriter, upResp *http.Resp
 		// Not valid JSON-RPC — forward as-is
 		g.copyResponseHeaders(w, upResp)
 		w.WriteHeader(upResp.StatusCode)
-		_, _ = w.Write(respBody)
+		_, _ = w.Write(respBody) //nosemgrep: no-direct-write-to-responsewriter -- JSON API proxy, not HTML
 		return
 	}
 
@@ -265,7 +265,7 @@ func (g *HTTPGateway) proxyJSONResponse(w http.ResponseWriter, upResp *http.Resp
 	// Forward the original response
 	g.copyResponseHeaders(w, upResp)
 	w.WriteHeader(upResp.StatusCode)
-	_, _ = w.Write(respBody)
+	_, _ = w.Write(respBody) //nosemgrep: no-direct-write-to-responsewriter -- JSON API proxy, not HTML
 }
 
 // proxySSEResponse streams an SSE response with per-event inspection.

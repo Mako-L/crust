@@ -3,6 +3,7 @@ rules:
   # 1. CREDENTIAL PROTECTION
   # ===========================================================================
   - name: protect-env-files
+    locked: true
     block: ["**/.env", "**/.env.*"]
     except: ["**/.env.example", "**/.env.template"]
     actions: [read, execute, write, delete, copy, move, network]
@@ -113,6 +114,7 @@ rules:
   # 7. BROWSER DATA PROTECTION
   # ===========================================================================
   - name: protect-browser-data
+    locked: true
     block:
       # Chrome
       - "$HOME/Library/Application Support/Google/Chrome/**/Login Data"
@@ -174,6 +176,7 @@ rules:
   # 9. PACKAGE MANAGER TOKENS
   # ===========================================================================
   - name: protect-package-tokens
+    locked: true
     block:
       # npm
       - "**/.npmrc"
@@ -205,6 +208,7 @@ rules:
   # 10. PERSISTENCE PROTECTION - Shell RC Files
   # ===========================================================================
   - name: protect-shell-rc
+    locked: true
     block:
       - "$HOME/.bashrc"
       - "$HOME/.bash_profile"
@@ -350,6 +354,7 @@ rules:
   # 14. GITHUB CLI TOKEN PROTECTION
   # ===========================================================================
   - name: protect-github-cli
+    locked: true
     block:
       - "$HOME/.config/gh/hosts.yml"
       - "$HOME/AppData/Roaming/GitHub CLI/hosts.yml"

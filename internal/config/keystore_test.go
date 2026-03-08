@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -178,6 +179,36 @@ func TestSecrets_ValidateDBKey(t *testing.T) {
 	if err := s.ValidateDBKey(); err != nil {
 		t.Errorf("ValidateDBKey should pass: %v", err)
 	}
+}
+
+// FuzzKeystoreJSON verifies that json.Unmarshal into secretsMap never panics
+// on arbitrary input, matching the decode paths in fileGet/fileSet/fileDelete.
+func FuzzKeystoreJSON(f *testing.F) {
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`{"key":"value"}`))
+	f.Add([]byte(`{"key":"value"`)) // truncated
+	f.Add([]byte(`null`))
+	f.Add([]byte(`"string"`))
+	f.Add([]byte(`[1,2,3]`))
+	f.Add([]byte{})
+	f.Add([]byte(`{"\u0000":"val"}`)) // null byte in key
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var m secretsMap
+		if err := json.Unmarshal(data, &m); err != nil {
+			return // invalid JSON is fine
+		}
+		// Re-marshal must not panic.
+		out, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			t.Fatalf("MarshalIndent failed on valid input: %v", err)
+		}
+		// Round-trip: unmarshal again must succeed.
+		var m2 secretsMap
+		if err := json.Unmarshal(out, &m2); err != nil {
+			t.Fatalf("round-trip unmarshal failed: %v", err)
+		}
+	})
 }
 
 func TestSecrets_MaskLLMAPIKey(t *testing.T) {

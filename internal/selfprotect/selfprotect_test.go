@@ -1,6 +1,9 @@
 package selfprotect
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // SECURITY: Check must block all loopback representations targeting Crust API.
 func TestCheck_APIBlocks(t *testing.T) {
@@ -118,4 +121,43 @@ func TestCheck_SocketAllows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzSelfProtectBypass attempts to find inputs that bypass self-protection.
+// Tests API regex, socket regex, and loopback+crust bypass detection.
+func FuzzSelfProtectBypass(f *testing.F) {
+	// API regex seeds
+	f.Add("localhost:9090/api/crust/rules")
+	f.Add("127.0.0.1:9090/api/crust/rules")
+	f.Add("[::1]:9090/crust")
+	f.Add("0x7f000001:9090/crust")
+	f.Add("2130706433:9090/crust")
+	f.Add("127.0.0.1.nip.io:9090/crust")
+	f.Add("http://0:9090/api/crust/rules")
+	// Socket regex seeds
+	f.Add("curl --unix-socket /tmp/crust.sock http://localhost/api")
+	f.Add("socat UNIX-CONNECT:/tmp/crust.sock -")
+	f.Add(`\\.\pipe\crust-api`)
+	f.Add("nc -U /tmp/crust-api-9090.sock")
+	// Bypass seeds
+	f.Add("http://127.0.0.1:9090/api/crust/rules")
+	f.Add("http://localhost:9090/api/crust/stop")
+	f.Add("http://[::1]:9090/crust")
+	f.Add("http://0x7f000001:9090/crust")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		result := Check(input)
+
+		// Oracle: if the input clearly contains a loopback URL targeting crust,
+		// it must be blocked.
+		lower := strings.ToLower(input)
+		hasLoopback := strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "localhost")
+		hasCrust := strings.Contains(lower, "crust")
+
+		if hasLoopback && hasCrust && result == nil {
+			if strings.Contains(lower, "://127.0.0.1") || strings.Contains(lower, "://localhost") {
+				t.Errorf("BYPASS: %q contains loopback+crust URL but was not blocked", input)
+			}
+		}
+	})
 }

@@ -246,5 +246,61 @@ var dlpPatterns = []dlpPattern{
 		message: "Cannot write Firebase key — potential credential leak",
 	},
 
+	// PlanetScale
+	{
+		name:    "builtin:dlp-planetscale-token",
+		re:      regexp.MustCompile(`pscale_tkn_[A-Za-z0-9_\-]{30,}`),
+		message: "Cannot write PlanetScale token — potential credential leak",
+	},
+
+	// Resend
+	{
+		name:    "builtin:dlp-resend-api-key",
+		re:      regexp.MustCompile(`re_[A-Za-z0-9]{20,}`),
+		message: "Cannot write Resend API key — potential credential leak",
+	},
+
+	// Fly.io
+	{
+		name:    "builtin:dlp-flyio-token",
+		re:      regexp.MustCompile(`fo1_[A-Za-z0-9_\-]{40,}`),
+		message: "Cannot write Fly.io token — potential credential leak",
+	},
+
+	// Railway
+	{
+		name:    "builtin:dlp-railway-token",
+		re:      regexp.MustCompile(`railway_[A-Za-z0-9_\-]{20,}`),
+		message: "Cannot write Railway token — potential credential leak",
+	},
+
+	// Clerk
+	{
+		name:    "builtin:dlp-clerk-secret-key",
+		re:      regexp.MustCompile(`sk_live_[A-Za-z0-9]{20,}`),
+		message: "Cannot write Clerk secret key — potential credential leak",
+	},
+
+	// Upstash
+	{
+		name:    "builtin:dlp-upstash-token",
+		re:      regexp.MustCompile(`AX[A-Za-z0-9]{40,}`),
+		message: "Cannot write Upstash token — potential credential leak",
+	},
+
+	// Turso/LibSQL
+	{
+		name:    "builtin:dlp-turso-token",
+		re:      regexp.MustCompile(`eyJhbGciOi[A-Za-z0-9_\-]{50,}\.[A-Za-z0-9_\-]{50,}\.[A-Za-z0-9_\-]{20,}`),
+		message: "Cannot write Turso/LibSQL auth token — potential credential leak",
+	},
+
+	// Neon
+	{
+		name:    "builtin:dlp-neon-token",
+		re:      regexp.MustCompile(`neon_[A-Za-z0-9_\-]{30,}`),
+		message: "Cannot write Neon database token — potential credential leak",
+	},
+
 	// Add new patterns above this line.
 }

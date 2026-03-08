@@ -202,8 +202,16 @@ In stdio proxy modes (MCP Gateway, ACP Wrap, Auto-detect), DLP also scans **serv
 | Twilio | API keys (`SK...`) |
 | Doppler | Tokens (`dp.st....`) |
 | Firebase | Cloud Messaging keys (`AAAA...:...`) |
+| PlanetScale | Database tokens (`pscale_tkn_...`) |
+| Resend | API keys (`re_...`) |
+| Fly.io | Tokens (`fo1_...`) |
+| Railway | Tokens (`railway_...`) |
+| Clerk | Secret keys (`sk_live_...`) |
+| Upstash | Redis/Kafka tokens (`AX...`) |
+| Turso/LibSQL | Auth tokens (JWT format) |
+| Neon | Database tokens (`neon_...`) |
 
-Tier 1 patterns (34 hardcoded) are sourced from [gitleaks v8.24](https://github.com/gitleaks/gitleaks) and extended for newer services. See `internal/rules/dlp.go` for the full list.
+Tier 1 patterns (42 hardcoded) are sourced from [gitleaks v8.24](https://github.com/gitleaks/gitleaks) and extended for newer services. See `internal/rules/dlp.go` for the full list.
 
 [gitleaks](https://github.com/gitleaks/gitleaks) is a required dependency, providing 200+ additional token formats beyond the hardcoded patterns. It is installed automatically by the Crust installer.
 
@@ -213,7 +221,7 @@ Step 7 also runs crypto-specific DLP with **cryptographic validation** — not j
 
 | Type | Detection | Validation |
 |------|-----------|------------|
-| BIP39 mnemonic | Sliding window (12/15/18/21/24 words) | Embedded 2048-word wordlist |
+| BIP39 mnemonic | Sliding window (12/15/18/21/24 words) | Embedded 10-language wordlist (20,480 words) |
 | Extended private key | `[xyzt]prv` prefix match | base58check checksum via btcutil |
 | WIF private key | `[5KL]` prefix match | base58check checksum + version byte (0x80/0xEF) |
 

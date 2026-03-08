@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"crypto/sha512"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -91,6 +93,33 @@ func TestCryptoDLPDetection(t *testing.T) {
 			name:    "WIF key embedded in config",
 			content: "PRIVATE_KEY=" + testWIF,
 			wantID:  "builtin:dlp-crypto-wif",
+		},
+
+		// --- Multilingual BIP39 Detection ---
+		{
+			name:    "Spanish 12-word mnemonic",
+			content: "ábaco abdomen abeja abierto abogado abono abrazo abrir abuelo abuso acción aceite",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Japanese 12-word mnemonic",
+			content: "あいこくしん あいさつ あいだ あおぞら あかちゃん あきる あけがた あける あこがれる あさい あさひ あしあと",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Chinese simplified 12-word mnemonic",
+			content: "的 一 是 在 不 了 有 和 人 这 中 大",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "Korean 12-word mnemonic",
+			content: "가격 가끔 가난 가능 가득 가르침 가뭄 가방 가상 가슴 가운데 가을",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
+		},
+		{
+			name:    "French 12-word mnemonic",
+			content: "abaisser abandon abdiquer abeille abolir aborder aboutir aboyer abrasif absence abroger absolu",
+			wantID:  "builtin:dlp-crypto-bip39-mnemonic",
 		},
 
 		// --- No Detection (clean content) ---
@@ -279,8 +308,70 @@ func TestCryptoWalletPathsOSSpecific(t *testing.T) {
 	}
 }
 
-func TestBIP39WordlistCount(t *testing.T) {
-	if len(bip39Wordlist) != 2048 {
-		t.Errorf("bip39Wordlist has %d words, want 2048", len(bip39Wordlist))
+// TestBIP39WordlistIntegrity verifies that embedded BIP39 wordlist files have not
+// been tampered with. SHA-512 checksums match the canonical bitcoin/bips repository:
+// https://github.com/bitcoin/bips/tree/master/bip-0039
+func TestBIP39WordlistIntegrity(t *testing.T) {
+	expected := map[string]string{
+		"chinese_simplified.txt":  "f5b6d696a6b75bdeeacd0e0742d31eaa06cd683bb3c149052d82e0d47039534b23c82fc47fb193c86ff2b7c2b22f73ccc48cc500f09abc5e228998d9bc413ef7",
+		"chinese_traditional.txt": "1e2689a48317a12a6b4a6a74de2241380fef57b250fafe6ab00a479db85d12661f8c33749240c9cec6535acd7f91e71dcba0bb8a27d1d32a3b76fe34797cad5b",
+		"czech.txt":               "3d56a9d507b5b07a99b9d9924d8540944dd226d4b5050852027f09309a85513db2e57c9186f70b8f8226c342c28efcedd1e8edd507e1d39f8da693cfac0c39ca",
+		"english.txt":             "416c71ba30018ea292bb36cdc23c9329673485a8d8933266a9d9a7cc72153b8baed3d430f52eab4f5d3addf6583611b3777a50454599f1e42716f5f879621123",
+		"french.txt":              "001b2e7d1d17416776fa5306e4f7ec5812f3f35cc26fde46800a7dab1412870ac8b779b0c2fec1d75c24b80868e55bc5bfb88c8ded50c84040248b76a2c5332d",
+		"italian.txt":             "d3dca24cf03f04eea1872d98c91748a8aa7aeac6e2c885a99f2d452904a75ffcf271506db369335726c0e3f7c8a6454935782586414b9affd2fe0eb004223da1",
+		"japanese.txt":            "3faf87f7e48eb6635f7d7b18a34e7dacbc2c43a1cf6aa9c96015b2a3549710b8b7a0961e5d2e32d7e369099db89a874c4d761a8384fb558744c7f47ca8cb0772",
+		"korean.txt":              "e645a1e0f26f2727a8fb7605d3b59668a670c9df04d07576fe473d844a23d0192020aedc286fbb9b1f64709ad30e6acb825803cf9f872954c1324aefd4977710",
+		"portuguese.txt":          "0e6aa42870c6f9a77bda0931ea9423febffefbeb49e9dbda5fa732fc3479942629050517fef57bb1a76026195e16785186c0cfe26261c8fcc31f52fe69beda0f",
+		"spanish.txt":             "0e838229265de6c80505088682d2dc9510147c3ab1713b556b594d09529b493cc3a7e391ad690dda2052d4e11c56572f8a215a7fffdb2630b13b4637329f3c31",
+	}
+
+	entries, err := bip39WordlistFS.ReadDir("bip39")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		wantHash, ok := expected[entry.Name()]
+		if !ok {
+			t.Errorf("unexpected file in bip39/: %s", entry.Name())
+			continue
+		}
+		data, err := bip39WordlistFS.ReadFile("bip39/" + entry.Name())
+		if err != nil {
+			t.Errorf("read %s: %v", entry.Name(), err)
+			continue
+		}
+		gotHash := fmt.Sprintf("%x", sha512.Sum512(data))
+		if gotHash != wantHash {
+			t.Errorf("%s: SHA-512 mismatch\n  got:  %s\n  want: %s\n  → file may have been tampered with", entry.Name(), gotHash, wantHash)
+		}
+		found++
+	}
+
+	if found != len(expected) {
+		t.Errorf("expected %d wordlist files, found %d", len(expected), found)
+	}
+}
+
+func TestBIP39UnifiedWordlistCount(t *testing.T) {
+	// 10 languages × 2048 words each, minus overlap between languages.
+	// The unified set should have at least 10,000 unique words.
+	if len(bip39Unified) < 10000 {
+		t.Errorf("bip39Unified has %d words, want >= 10000", len(bip39Unified))
+	}
+	// Each language has exactly 2048 words, so max is 20480.
+	if len(bip39Unified) > 20480 {
+		t.Errorf("bip39Unified has %d words, want <= 20480", len(bip39Unified))
+	}
+	// Spot-check: English "abandon", Spanish "ábaco", Japanese "あいこくしん"
+	spotChecks := []string{"abandon", "zoo", "ábaco", "あいこくしん", "的", "가격"}
+	for _, w := range spotChecks {
+		if !bip39Unified[w] {
+			t.Errorf("bip39Unified missing expected word %q", w)
+		}
 	}
 }

@@ -31,7 +31,7 @@
 <p align="center">
   <a href="https://github.com/BakeLens/crust/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/Security%20Policy-Responsible%20Disclosure-green" alt="Security Policy" /></a>
   <img src="https://img.shields.io/badge/SAST-gosec%20%7C%20semgrep-blueviolet" alt="SAST" />
-  <img src="https://img.shields.io/badge/Fuzz%20Tested-38%20targets-orange" alt="Fuzz Tested" />
+  <img src="https://img.shields.io/badge/Fuzz%20Tested-39%20targets-orange" alt="Fuzz Tested" />
   <img src="https://img.shields.io/badge/Secrets-govulncheck%20%7C%20gitleaks-critical" alt="Secret Scanning" />
 </p>
 
@@ -159,7 +159,7 @@ Supports JetBrains IDEs and other ACP-compatible editors. See the [ACP setup gui
 
 ### Built-in Rules
 
-Crust ships with **27 security rules** (19 locked, 8 user-disablable) and **34 DLP token-detection patterns** out of the box:
+Crust ships with **27 security rules** (24 locked, 3 user-disablable) and **42 DLP token-detection patterns** out of the box:
 
 | Category | What's Protected |
 |----------|-----------------|
@@ -171,7 +171,7 @@ Crust ships with **27 security rules** (19 locked, 8 user-disablable) and **34 D
 | **Git Credentials** | `.git-credentials`, `.config/git/credentials` |
 | **Persistence** | Shell RC files, `authorized_keys`, cron/systemd/launchd, git hooks |
 | **Agent Config** | `.claude/settings.json`, `.cursor/mcp.json`, `.mcp.json` — prevents privilege escalation |
-| **DLP Token Detection** | Content-based scanning for real API keys and tokens (AWS, GitHub, Stripe, OpenAI, Anthropic, and [23 more](docs/how-it-works.md#dlp-secret-detection)) |
+| **DLP Token Detection** | Content-based scanning for real API keys and tokens (AWS, GitHub, Stripe, OpenAI, Anthropic, and [31 more](docs/how-it-works.md#dlp-secret-detection)) |
 | **Key Exfiltration** | Content-based PEM private key detection |
 | **Crypto Wallets** | BIP39 mnemonics, xprv/WIF keys (checksum-validated), wallet directories for 16 chains |
 | **Self-Protection** | Agents cannot read, modify, or disable Crust itself |

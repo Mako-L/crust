@@ -1,0 +1,259 @@
+package plugin
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/BakeLens/crust/internal/logger"
+)
+
+var log = logger.New("plugin")
+
+// Circuit breaker configuration.
+const (
+	MaxConsecutiveFailures = 3
+	CircuitResetInterval   = 5 * time.Minute
+	MaxDisableCycles       = 5 // permanently disable after this many disable→retry cycles
+)
+
+// pluginState tracks health for one registered plugin.
+type pluginState struct {
+	plugin        Plugin
+	name          string       // cached at registration — fixes Bug 6.2 (Name spoofing)
+	failures      atomic.Int64 // consecutive panics + timeouts
+	disabled      atomic.Bool
+	disabledAt    atomic.Int64 // monotonic nanos (time.Now().UnixNano uses monotonic on Go 1.9+)
+	disableCycles atomic.Int64 // total times disabled — for exponential backoff
+	totalPanics   atomic.Int64
+	totalTimeouts atomic.Int64
+	mu            sync.Mutex // protects circuit breaker state transitions — fixes Bug 1.1 (TOCTOU)
+}
+
+// Stats exposes per-plugin health info for diagnostics/TUI.
+type Stats struct {
+	Name          string `json:"name"`
+	Disabled      bool   `json:"disabled"`
+	Failures      int64  `json:"consecutive_failures"`
+	TotalPanics   int64  `json:"total_panics"`
+	TotalTimeouts int64  `json:"total_timeouts"`
+	DisableCycles int64  `json:"disable_cycles"`
+	Permanent     bool   `json:"permanently_disabled"`
+}
+
+// Registry manages plugins with crash isolation.
+type Registry struct {
+	states  []*pluginState // pointer slice — append won't invalidate existing elements
+	pool    *Pool
+	mu      sync.RWMutex // protects states slice (Register/Close vs Evaluate)
+	closing atomic.Bool  // set during Close to reject new Evaluate calls
+}
+
+// NewRegistry creates a registry with the given worker pool.
+func NewRegistry(pool *Pool) *Registry {
+	if pool == nil {
+		pool = NewPool(0, 0)
+	}
+	return &Registry{pool: pool}
+}
+
+// Register initializes and adds a plugin. Plugins are evaluated in
+// registration order. Returns an error if Init fails or name conflicts.
+func (r *Registry) Register(p Plugin, cfg json.RawMessage) error {
+	if r.closing.Load() {
+		return errors.New("registry is closing")
+	}
+
+	name := p.Name()
+	if name == "" {
+		return errors.New("plugin name must not be empty")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Check for name conflict.
+	for _, s := range r.states {
+		if s.name == name {
+			return fmt.Errorf("plugin %q already registered", name)
+		}
+	}
+
+	if err := p.Init(cfg); err != nil {
+		return fmt.Errorf("plugin %q init: %w", name, err)
+	}
+
+	r.states = append(r.states, &pluginState{
+		plugin: p,
+		name:   name, // cache name at registration
+	})
+	return nil
+}
+
+// cooldownFor returns the cooldown duration with exponential backoff.
+// Base: CircuitResetInterval, doubles each cycle, capped at 1 hour.
+func cooldownFor(cycles int64) time.Duration {
+	if cycles <= 0 {
+		return CircuitResetInterval
+	}
+	d := CircuitResetInterval
+	for range cycles - 1 {
+		d *= 2
+		if d > time.Hour {
+			return time.Hour
+		}
+	}
+	return d
+}
+
+// Evaluate runs all healthy plugins in order through the worker pool.
+// Returns the first non-nil Result, or nil if all plugins allow the call.
+func (r *Registry) Evaluate(ctx context.Context, req Request) *Result {
+	if r.closing.Load() {
+		return nil // fail-open during shutdown
+	}
+
+	// Acquire read lock to safely iterate states — fixes Bug 1.3.
+	r.mu.RLock()
+	states := r.states
+	r.mu.RUnlock()
+
+	for _, s := range states {
+		result := r.evaluateOne(ctx, s, req)
+		if result != nil {
+			return result
+		}
+	}
+	return nil
+}
+
+// evaluateOne runs a single plugin with crash isolation.
+func (r *Registry) evaluateOne(ctx context.Context, s *pluginState, req Request) *Result {
+	// Circuit breaker check — uses mutex to prevent TOCTOU race (Bug 1.1 fix).
+	s.mu.Lock()
+	if s.disabled.Load() {
+		cycles := s.disableCycles.Load()
+		if cycles >= MaxDisableCycles {
+			s.mu.Unlock()
+			return nil // permanently disabled
+		}
+		cooldown := cooldownFor(cycles)
+		elapsed := time.Duration(time.Now().UnixNano()-s.disabledAt.Load()) * time.Nanosecond
+		if elapsed < cooldown {
+			s.mu.Unlock()
+			return nil // still in cooldown
+		}
+		// Cooldown elapsed — re-enable for a single probe.
+		s.disabled.Store(false)
+		s.failures.Store(0)
+		s.mu.Unlock()
+	} else {
+		s.mu.Unlock()
+	}
+
+	// Deep-copy request to prevent mutation across plugins (Bug 6.4 fix).
+	reqCopy := req.DeepCopy()
+
+	// Run through worker pool with crash isolation.
+	result, err := r.pool.Run(ctx, func(evalCtx context.Context) *Result {
+		return s.plugin.Evaluate(evalCtx, reqCopy)
+	})
+
+	if err != nil {
+		// Pool exhaustion is not the plugin's fault — don't count as failure.
+		if errors.Is(err, ErrPoolExhausted) {
+			log.Warn("plugin %q skipped: pool exhausted", s.name)
+			return nil
+		}
+
+		s.mu.Lock()
+		count := s.failures.Add(1)
+		if errors.Is(err, ErrTimeout) {
+			s.totalTimeouts.Add(1)
+			log.Warn("plugin %q timed out", s.name)
+		} else {
+			s.totalPanics.Add(1)
+			log.Warn("plugin %q panicked: %v", s.name, err)
+		}
+		if count >= int64(MaxConsecutiveFailures) {
+			s.disabled.Store(true)
+			s.disabledAt.Store(time.Now().UnixNano())
+			s.disableCycles.Add(1)
+			log.Warn("plugin %q disabled after %d consecutive failures (cycle %d)",
+				s.name, count, s.disableCycles.Load())
+		}
+		s.mu.Unlock()
+		return nil // fail-open
+	}
+
+	// Success — reset failure counter.
+	s.failures.Store(0)
+
+	if result != nil {
+		result.Plugin = s.name // use cached name (Bug 6.2 fix)
+		// Validate severity — default to "high" if invalid (Bug 5.2 fix).
+		result.Severity = result.EffectiveSeverity()
+		return result
+	}
+	return nil
+}
+
+// Close shuts down all plugins in reverse registration order.
+// Waits for in-flight evaluations to drain before closing plugins.
+func (r *Registry) Close() error {
+	r.closing.Store(true) // reject new Evaluate calls (Bug 7.5 fix)
+
+	// Acquire write lock to wait for in-flight Evaluate calls to finish.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var errs []error
+	for i := len(r.states) - 1; i >= 0; i-- {
+		if err := r.states[i].plugin.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("plugin %q close: %w", r.states[i].name, err))
+		}
+	}
+	r.states = nil
+	return errors.Join(errs...)
+}
+
+// List returns the names of all registered plugins.
+func (r *Registry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, len(r.states))
+	for i, s := range r.states {
+		names[i] = s.name
+	}
+	return names
+}
+
+// Stats returns per-plugin health info.
+func (r *Registry) Stats() []Stats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stats := make([]Stats, len(r.states))
+	for i, s := range r.states {
+		stats[i] = Stats{
+			Name:          s.name,
+			Disabled:      s.disabled.Load(),
+			Failures:      s.failures.Load(),
+			TotalPanics:   s.totalPanics.Load(),
+			TotalTimeouts: s.totalTimeouts.Load(),
+			DisableCycles: s.disableCycles.Load(),
+			Permanent:     s.disableCycles.Load() >= MaxDisableCycles,
+		}
+	}
+	return stats
+}
+
+// Len returns the number of registered plugins.
+func (r *Registry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.states)
+}

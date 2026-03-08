@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/BakeLens/crust/internal/rules"
 )
 
 // =============================================================================
@@ -110,7 +112,7 @@ func (p *dynamicNamePlugin) Name() string {
 }
 func (p *dynamicNamePlugin) Init(json.RawMessage) error { return nil }
 func (p *dynamicNamePlugin) Evaluate(_ context.Context, _ Request) *Result {
-	return &Result{RuleName: "test", Severity: "high", Message: "blocked"}
+	return &Result{RuleName: "test", Severity: rules.SeverityHigh, Message: "blocked"}
 }
 func (p *dynamicNamePlugin) Close() error { return nil }
 
@@ -131,7 +133,7 @@ func (p *ruleAwarePlugin) Evaluate(_ context.Context, req Request) *Result {
 	}
 	return &Result{
 		RuleName: p.name + ":missing-rule",
-		Severity: "high",
+		Severity: rules.SeverityHigh,
 		Message:  fmt.Sprintf("required rule %q not found in snapshot (%d rules)", p.requiredRule, len(req.Rules)),
 	}
 }
@@ -175,13 +177,13 @@ func TestRequest_DeepCopy(t *testing.T) {
 	original := Request{
 		ToolName:   "Bash",
 		Arguments:  json.RawMessage(`{"command":"ls"}`),
-		Operation:  "execute",
-		Operations: []string{"execute", "read"},
+		Operation:  rules.OpExecute,
+		Operations: []rules.Operation{rules.OpExecute, rules.OpRead},
 		Paths:      []string{"/home/user/project"},
 		Hosts:      []string{"example.com"},
 		Content:    "test content",
 		Rules: []RuleSnapshot{
-			{Name: "rule1", Source: "builtin", Severity: "critical"},
+			{Name: "rule1", Source: rules.SourceBuiltin, Severity: rules.SeverityCritical},
 		},
 	}
 
@@ -190,7 +192,7 @@ func TestRequest_DeepCopy(t *testing.T) {
 	// Mutate the copy.
 	cp.Paths[0] = "/etc/shadow"
 	cp.Hosts[0] = "evil.com"
-	cp.Operations[0] = "delete"
+	cp.Operations[0] = rules.OpDelete
 	cp.Arguments[0] = 'X'
 	cp.Rules[0].Name = "corrupted"
 
@@ -201,7 +203,7 @@ func TestRequest_DeepCopy(t *testing.T) {
 	if original.Hosts[0] != "example.com" {
 		t.Errorf("DeepCopy failed: original Hosts mutated: %v", original.Hosts)
 	}
-	if original.Operations[0] != "execute" {
+	if original.Operations[0] != rules.OpExecute {
 		t.Errorf("DeepCopy failed: original Operations mutated: %v", original.Operations)
 	}
 	if original.Arguments[0] != '{' {
@@ -222,16 +224,16 @@ func TestRequest_DeepCopy_NilSlices(t *testing.T) {
 
 func TestResult_EffectiveSeverity(t *testing.T) {
 	tests := []struct {
-		input string
-		want  string
+		input rules.Severity
+		want  rules.Severity
 	}{
-		{"critical", "critical"},
-		{"high", "high"},
-		{"warning", "warning"},
-		{"info", "info"},
-		{"banana", "high"},
-		{"", "high"},
-		{"CRITICAL", "high"}, // case-sensitive
+		{rules.SeverityCritical, rules.SeverityCritical},
+		{rules.SeverityHigh, rules.SeverityHigh},
+		{rules.SeverityWarning, rules.SeverityWarning},
+		{rules.SeverityInfo, rules.SeverityInfo},
+		{"banana", rules.SeverityHigh},
+		{"", rules.SeverityHigh},
+		{"CRITICAL", rules.SeverityHigh}, // case-sensitive
 	}
 	for _, tt := range tests {
 		r := &Result{Severity: tt.input}
@@ -243,13 +245,13 @@ func TestResult_EffectiveSeverity(t *testing.T) {
 
 func TestResult_EffectiveAction(t *testing.T) {
 	tests := []struct {
-		input string
-		want  string
+		input rules.Action
+		want  rules.Action
 	}{
-		{"", "block"},
-		{"block", "block"},
-		{"log", "log"},
-		{"alert", "alert"},
+		{"", rules.ActionBlock},
+		{rules.ActionBlock, rules.ActionBlock},
+		{rules.ActionLog, rules.ActionLog},
+		{rules.ActionAlert, rules.ActionAlert},
 	}
 	for _, tt := range tests {
 		r := &Result{Action: tt.input}
@@ -267,10 +269,10 @@ func TestRuleSnapshot_JSONRoundTrip(t *testing.T) {
 	snap := RuleSnapshot{
 		Name:        "protect-env",
 		Description: "Block .env file access",
-		Source:      "builtin",
-		Severity:    "critical",
+		Source:      rules.SourceBuiltin,
+		Severity:    rules.SeverityCritical,
 		Priority:    10,
-		Actions:     []string{"read", "write"},
+		Actions:     []rules.Operation{rules.OpRead, rules.OpWrite},
 		BlockPaths:  []string{"**/.env"},
 		BlockExcept: []string{"**/.env.example"},
 		Message:     "Cannot access .env files",
@@ -307,11 +309,11 @@ func TestRequest_RulesInJSON(t *testing.T) {
 	// Verify that Request with rules serializes correctly over the wire protocol.
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 		Command:   "ls -la",
 		Rules: []RuleSnapshot{
-			{Name: "r1", Source: "builtin", Severity: "critical", Actions: []string{"read"}},
-			{Name: "r2", Source: "user", Severity: "warning", Actions: []string{"write"}},
+			{Name: "r1", Source: rules.SourceBuiltin, Severity: rules.SeverityCritical, Actions: []rules.Operation{rules.OpRead}},
+			{Name: "r2", Source: rules.SourceUser, Severity: rules.SeverityWarning, Actions: []rules.Operation{rules.OpWrite}},
 		},
 	}
 
@@ -333,14 +335,16 @@ func TestRequest_RulesInJSON(t *testing.T) {
 	}
 }
 
-func TestRequest_EmptyRulesOmitted(t *testing.T) {
-	// Rules with omitempty should not appear when nil.
-	req := Request{ToolName: "Bash"}
+func TestRequest_AllFieldsPresent(t *testing.T) {
+	// All fields must always be present (no omitempty) to eliminate protocol ambiguity.
+	req := Request{ToolName: "Bash", Operation: rules.OpExecute, Arguments: json.RawMessage(`{}`)}
 	data, _ := json.Marshal(req)
 	var m map[string]any
 	json.Unmarshal(data, &m)
-	if _, exists := m["rules"]; exists {
-		t.Error("rules should be omitted when nil")
+	for _, field := range []string{"tool_name", "arguments", "operation", "operations", "command", "paths", "hosts", "content", "evasive", "rules"} {
+		if _, exists := m[field]; !exists {
+			t.Errorf("field %q missing from marshaled Request (no omitempty)", field)
+		}
 	}
 }
 
@@ -381,7 +385,7 @@ func TestWireResponse_AllowResult(t *testing.T) {
 func TestWireResponse_BlockResult(t *testing.T) {
 	result, _ := json.Marshal(Result{
 		RuleName: "sandbox:fs-deny",
-		Severity: "high",
+		Severity: rules.SeverityHigh,
 		Message:  "path outside sandbox",
 	})
 	resp := WireResponse{Result: result}
@@ -412,11 +416,11 @@ func TestWireProtocol_EvaluateWithRules(t *testing.T) {
 	// Full round-trip: Request with rules → wire → decode.
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 		Command:   "rm -rf /etc",
 		Paths:     []string{"/etc"},
 		Rules: []RuleSnapshot{
-			{Name: "protect-etc", Source: "builtin", Severity: "critical", Actions: []string{"delete"}, BlockPaths: []string{"/etc/**"}},
+			{Name: "protect-etc", Source: rules.SourceBuiltin, Severity: rules.SeverityCritical, Actions: []rules.Operation{rules.OpDelete}, BlockPaths: []string{"/etc/**"}},
 		},
 	}
 
@@ -450,10 +454,10 @@ func TestWireProtocol_EvaluateWithRules(t *testing.T) {
 
 func TestPool_BasicExecution(t *testing.T) {
 	pool := NewPool(4, time.Second)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := pool.Run(ctx, func(context.Context) *Result {
-		return &Result{RuleName: "test", Severity: "high", Message: "blocked"}
+		return &Result{RuleName: "test", Severity: rules.SeverityHigh, Message: "blocked"}
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -465,7 +469,7 @@ func TestPool_BasicExecution(t *testing.T) {
 
 func TestPool_PanicRecovery(t *testing.T) {
 	pool := NewPool(4, time.Second)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := pool.Run(ctx, func(context.Context) *Result {
 		panic("boom")
@@ -522,7 +526,7 @@ func TestPool_SlotExhaustion(t *testing.T) {
 
 func TestPool_ConcurrentExecution(t *testing.T) {
 	pool := NewPool(4, time.Second)
-	ctx := context.Background()
+	ctx := t.Context()
 	var running atomic.Int64
 	var maxRunning atomic.Int64
 
@@ -627,7 +631,7 @@ func TestRegistry_EvaluateAllow(t *testing.T) {
 
 	reg.Register(&allowPlugin{name: "p1"}, nil)
 	reg.Register(&allowPlugin{name: "p2"}, nil)
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result != nil {
 		t.Errorf("expected nil (allow), got %v", result)
 	}
@@ -640,9 +644,9 @@ func TestRegistry_EvaluateBlock(t *testing.T) {
 	reg.Register(&allowPlugin{name: "p1"}, nil)
 	reg.Register(&blockPlugin{
 		name:   "blocker",
-		result: Result{RuleName: "test:block", Severity: "high", Message: "denied"},
+		result: Result{RuleName: "test:block", Severity: rules.SeverityHigh, Message: "denied"},
 	}, nil)
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result == nil {
 		t.Fatal("expected block result")
 	}
@@ -656,13 +660,13 @@ func TestRegistry_FirstBlockWins(t *testing.T) {
 	defer reg.Close()
 
 	reg.Register(&blockPlugin{name: "first",
-		result: Result{RuleName: "first:block", Severity: "high", Message: "first"},
+		result: Result{RuleName: "first:block", Severity: rules.SeverityHigh, Message: "first"},
 	}, nil)
 	reg.Register(&blockPlugin{name: "second",
-		result: Result{RuleName: "second:block", Severity: "high", Message: "second"},
+		result: Result{RuleName: "second:block", Severity: rules.SeverityHigh, Message: "second"},
 	}, nil)
 
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result == nil || result.Plugin != "first" {
 		t.Errorf("expected first plugin to win, got %v", result)
 	}
@@ -678,17 +682,17 @@ func TestRegistry_PluginReceivesRules(t *testing.T) {
 
 	var store atomic.Value
 	reg.Register(&inspectPlugin{name: "inspector", store: &store}, nil)
-	rules := []RuleSnapshot{
-		{Name: "protect-env", Source: "builtin", Severity: "critical", Actions: []string{"read"}, BlockPaths: []string{"**/.env"}, Locked: true, Enabled: true},
-		{Name: "protect-ssh", Source: "builtin", Severity: "critical", Actions: []string{"read"}, BlockPaths: []string{"$HOME/.ssh/id_*"}, Locked: true, Enabled: true},
-		{Name: "user-custom", Source: "user", Severity: "warning", Actions: []string{"write"}, BlockPaths: []string{"/tmp/secret"}, Enabled: true},
+	ruleSnaps := []RuleSnapshot{
+		{Name: "protect-env", Source: rules.SourceBuiltin, Severity: rules.SeverityCritical, Actions: []rules.Operation{rules.OpRead}, BlockPaths: []string{"**/.env"}, Locked: true, Enabled: true},
+		{Name: "protect-ssh", Source: rules.SourceBuiltin, Severity: rules.SeverityCritical, Actions: []rules.Operation{rules.OpRead}, BlockPaths: []string{"$HOME/.ssh/id_*"}, Locked: true, Enabled: true},
+		{Name: "user-custom", Source: rules.SourceUser, Severity: rules.SeverityWarning, Actions: []rules.Operation{rules.OpWrite}, BlockPaths: []string{"/tmp/secret"}, Enabled: true},
 	}
 
-	reg.Evaluate(context.Background(), Request{
+	reg.Evaluate(t.Context(), Request{
 		ToolName:  "Read",
-		Operation: "read",
+		Operation: rules.OpRead,
 		Paths:     []string{"/home/user/.env"},
-		Rules:     rules,
+		Rules:     ruleSnaps,
 	})
 
 	seen := store.Load().(Request)
@@ -701,8 +705,8 @@ func TestRegistry_PluginReceivesRules(t *testing.T) {
 	if !seen.Rules[0].Locked {
 		t.Error("protect-env should be locked")
 	}
-	if seen.Rules[2].Source != "user" {
-		t.Errorf("third rule source = %q, want %q", seen.Rules[2].Source, "user")
+	if seen.Rules[2].Source != rules.SourceUser {
+		t.Errorf("third rule source = %q, want %q", seen.Rules[2].Source, rules.SourceUser)
 	}
 }
 
@@ -712,7 +716,7 @@ func TestRegistry_RuleAwarePlugin_BlocksWhenRuleMissing(t *testing.T) {
 
 	reg.Register(&ruleAwarePlugin{name: "policy", requiredRule: "protect-env"}, nil)
 	// Without rules — should block.
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Read", Rules: nil})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Read", Rules: nil})
 	if result == nil {
 		t.Fatal("expected block when required rule is missing")
 	}
@@ -726,7 +730,7 @@ func TestRegistry_RuleAwarePlugin_AllowsWhenRulePresent(t *testing.T) {
 	defer reg.Close()
 
 	reg.Register(&ruleAwarePlugin{name: "policy", requiredRule: "protect-env"}, nil)
-	result := reg.Evaluate(context.Background(), Request{
+	result := reg.Evaluate(t.Context(), Request{
 		ToolName: "Read",
 		Rules:    []RuleSnapshot{{Name: "protect-env"}},
 	})
@@ -741,16 +745,16 @@ func TestRegistry_RuleSnapshotProperties(t *testing.T) {
 
 	var store atomic.Value
 	reg.Register(&inspectPlugin{name: "inspector", store: &store}, nil)
-	reg.Evaluate(context.Background(), Request{
+	reg.Evaluate(t.Context(), Request{
 		ToolName: "Bash",
 		Rules: []RuleSnapshot{
 			{
 				Name:        "protect-etc",
 				Description: "Block /etc access",
-				Source:      "builtin",
-				Severity:    "critical",
+				Source:      rules.SourceBuiltin,
+				Severity:    rules.SeverityCritical,
 				Priority:    10,
-				Actions:     []string{"read", "write", "delete"},
+				Actions:     []rules.Operation{rules.OpRead, rules.OpWrite, rules.OpDelete},
 				BlockPaths:  []string{"/etc/**"},
 				BlockExcept: []string{"/etc/hostname"},
 				BlockHosts:  nil,
@@ -792,7 +796,7 @@ func TestRegistry_PanicRecovery(t *testing.T) {
 	counter := &countPlugin{name: "counter"}
 	reg.Register(&panicPlugin{name: "crasher"}, nil)
 	reg.Register(counter, nil)
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result != nil {
 		t.Errorf("expected nil (fail-open after panic), got %v", result)
 	}
@@ -809,7 +813,7 @@ func TestRegistry_TimeoutRecovery(t *testing.T) {
 	counter := &countPlugin{name: "counter"}
 	reg.Register(&hangPlugin{name: "hanger"}, nil)
 	reg.Register(counter, nil)
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result != nil {
 		t.Errorf("expected nil (fail-open after timeout), got %v", result)
 	}
@@ -830,7 +834,7 @@ func TestRegistry_CircuitBreaker_DisableAfterFailures(t *testing.T) {
 	counter := &countPlugin{name: "counter"}
 	reg.Register(&panicPlugin{name: "crasher"}, nil)
 	reg.Register(counter, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	for range MaxConsecutiveFailures {
 		reg.Evaluate(ctx, Request{ToolName: "Bash"})
 	}
@@ -862,7 +866,7 @@ func TestRegistry_CircuitBreaker_SuccessResetsCounter(t *testing.T) {
 		threshold: int64(MaxConsecutiveFailures - 1),
 	}
 	reg.Register(plugin, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	for range MaxConsecutiveFailures - 1 {
 		reg.Evaluate(ctx, Request{ToolName: "Bash"})
 	}
@@ -901,7 +905,7 @@ func TestRegistry_CircuitBreaker_PermanentDisable(t *testing.T) {
 	defer reg.Close()
 
 	reg.Register(&panicPlugin{name: "crasher"}, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reg.mu.RLock()
 	s := reg.states[0]
@@ -930,7 +934,7 @@ func TestRegistry_CircuitBreaker_ConcurrentReEnable(t *testing.T) {
 	counter := &countPlugin{name: "counter"}
 	reg.Register(&panicPlugin{name: "crasher"}, nil)
 	reg.Register(counter, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	for range MaxConsecutiveFailures {
 		reg.Evaluate(ctx, Request{ToolName: "Bash"})
 	}
@@ -968,7 +972,7 @@ func TestRegistry_NameCachedAtRegistration(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result == nil {
 		t.Fatal("expected block result")
 	}
@@ -994,7 +998,7 @@ func TestRegistry_RequestIsolationBetweenPlugins(t *testing.T) {
 		Hosts:    []string{"good.com"},
 		Rules:    []RuleSnapshot{{Name: "rule1"}},
 	}
-	reg.Evaluate(context.Background(), req)
+	reg.Evaluate(t.Context(), req)
 
 	seen := secondSaw.Load().(Request)
 	if len(seen.Paths) > 0 && seen.Paths[0] != "/home/user/safe" {
@@ -1020,12 +1024,12 @@ func TestRegistry_InvalidSeverityDefaultsToHigh(t *testing.T) {
 		result: Result{RuleName: "test", Severity: "banana", Message: "test"},
 	}, nil)
 
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result == nil {
 		t.Fatal("expected block result")
 	}
-	if result.Severity != "high" {
-		t.Errorf("Severity = %q, want %q (default for invalid)", result.Severity, "high")
+	if result.Severity != rules.SeverityHigh {
+		t.Errorf("Severity = %q, want %q (default for invalid)", result.Severity, rules.SeverityHigh)
 	}
 }
 
@@ -1040,7 +1044,7 @@ func TestRegistry_CloseRejectsNewEvaluate(t *testing.T) {
 	reg.Register(counter, nil)
 	reg.Close()
 
-	result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result != nil {
 		t.Errorf("expected nil after Close, got %v", result)
 	}
@@ -1062,13 +1066,13 @@ func TestRegistry_ConcurrentEvaluate(t *testing.T) {
 	reg.Register(&allowPlugin{name: "p1"}, nil)
 	reg.Register(&blockPlugin{
 		name:   "p2",
-		result: Result{RuleName: "test", Severity: "high", Message: "block"},
+		result: Result{RuleName: "test", Severity: rules.SeverityHigh, Message: "block"},
 	}, nil)
 
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Go(func() {
-			result := reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+			result := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 			if result == nil || result.Plugin != "p2" {
 				t.Errorf("unexpected result: %v", result)
 			}
@@ -1087,7 +1091,7 @@ func TestRegistry_ConcurrentEvaluateWithPanics(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Go(func() {
-			reg.Evaluate(context.Background(), Request{ToolName: "Bash"})
+			reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
 		})
 	}
 	wg.Wait()
@@ -1109,7 +1113,7 @@ func TestRegistry_Stats(t *testing.T) {
 
 	reg.Register(&panicPlugin{name: "crasher"}, nil)
 	reg.Register(&allowPlugin{name: "healthy"}, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	for range 5 {
 		reg.Evaluate(ctx, Request{ToolName: "Bash"})
 	}
@@ -1158,9 +1162,195 @@ func TestProcessPlugin_InitFailsWithBadPath(t *testing.T) {
 func TestProcessPlugin_EvaluateWhenNotStarted(t *testing.T) {
 	p := &ProcessPlugin{name: "dead"}
 	// Should fail-open when process is not running.
-	result := p.Evaluate(context.Background(), Request{ToolName: "Bash"})
+	result := p.Evaluate(t.Context(), Request{ToolName: "Bash"})
 	if result != nil {
 		t.Errorf("expected nil (fail-open) when process not running, got %v", result)
+	}
+}
+
+// =============================================================================
+// Bug #4: DeepCopy RuleSnapshot inner slices share backing arrays
+// =============================================================================
+
+func TestDeepCopy_RuleSnapshotInnerSlices(t *testing.T) {
+	original := Request{
+		ToolName: "Bash",
+		Rules: []RuleSnapshot{
+			{
+				Name:        "protect-env",
+				Actions:     []rules.Operation{rules.OpRead, rules.OpWrite},
+				BlockPaths:  []string{"/etc", "/var"},
+				BlockExcept: []string{"/etc/hostname"},
+				BlockHosts:  []string{"evil.com", "bad.com"},
+			},
+		},
+	}
+
+	cp := original.DeepCopy()
+
+	// Mutate all inner slices in the copy.
+	cp.Rules[0].Actions[0] = rules.Operation("CORRUPTED")
+	cp.Rules[0].Actions[1] = rules.Operation("CORRUPTED")
+	cp.Rules[0].BlockPaths[0] = "CORRUPTED"
+	cp.Rules[0].BlockExcept[0] = "CORRUPTED"
+	cp.Rules[0].BlockHosts[0] = "CORRUPTED"
+
+	// Original inner slices must be unaffected.
+	if original.Rules[0].Actions[0] != rules.OpRead {
+		t.Errorf("DeepCopy: original Actions[0] corrupted: got %q, want %q", original.Rules[0].Actions[0], rules.OpRead)
+	}
+	if original.Rules[0].Actions[1] != rules.OpWrite {
+		t.Errorf("DeepCopy: original Actions[1] corrupted: got %q, want %q", original.Rules[0].Actions[1], rules.OpWrite)
+	}
+	if original.Rules[0].BlockPaths[0] != "/etc" {
+		t.Errorf("DeepCopy: original BlockPaths[0] corrupted: got %q, want %q", original.Rules[0].BlockPaths[0], "/etc")
+	}
+	if original.Rules[0].BlockExcept[0] != "/etc/hostname" {
+		t.Errorf("DeepCopy: original BlockExcept[0] corrupted: got %q, want %q", original.Rules[0].BlockExcept[0], "/etc/hostname")
+	}
+	if original.Rules[0].BlockHosts[0] != "evil.com" {
+		t.Errorf("DeepCopy: original BlockHosts[0] corrupted: got %q, want %q", original.Rules[0].BlockHosts[0], "evil.com")
+	}
+}
+
+// =============================================================================
+// Bug #8: Action validation — invalid actions pass through as-is
+// =============================================================================
+
+func TestResult_ActionValidation(t *testing.T) {
+	tests := []struct {
+		input rules.Action
+		want  rules.Action
+	}{
+		// Valid actions.
+		{rules.ActionBlock, rules.ActionBlock},
+		{rules.ActionLog, rules.ActionLog},
+		{rules.ActionAlert, rules.ActionAlert},
+		{"", rules.ActionBlock}, // empty defaults to "block"
+
+		// Invalid actions — EffectiveAction returns them as-is (no normalization).
+		{"allow", "allow"},
+		{"banana", "banana"},
+		{"BLOCK", "BLOCK"},
+		{"Block", "Block"},
+		{"LOG", "LOG"},
+		{"deny", "deny"},
+	}
+	for _, tt := range tests {
+		r := &Result{Action: tt.input}
+		got := r.EffectiveAction()
+		if got != tt.want {
+			t.Errorf("EffectiveAction(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// =============================================================================
+// Pool.Size edge cases
+// =============================================================================
+
+func TestPool_Size(t *testing.T) {
+	tests := []struct {
+		name string
+		size int
+		want int
+	}{
+		{"explicit size", 4, 4},
+		{"size 1", 1, 1},
+		{"large size", 128, 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := NewPool(tt.size, time.Second)
+			if got := pool.Size(); got != tt.want {
+				t.Errorf("Size() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPool_Size_DefaultsWhenZeroOrNegative(t *testing.T) {
+	pool := NewPool(0, time.Second)
+	if pool.Size() <= 0 {
+		t.Errorf("Size() = %d, want > 0 for default", pool.Size())
+	}
+	pool2 := NewPool(-1, time.Second)
+	if pool2.Size() <= 0 {
+		t.Errorf("Size() = %d, want > 0 for default", pool2.Size())
+	}
+}
+
+// =============================================================================
+// Registry.Len edge cases
+// =============================================================================
+
+func TestRegistry_Len(t *testing.T) {
+	reg := NewRegistry(NewPool(4, time.Second))
+	defer reg.Close()
+
+	if reg.Len() != 0 {
+		t.Errorf("Len() = %d, want 0 for empty registry", reg.Len())
+	}
+
+	reg.Register(&allowPlugin{name: "a"}, nil)
+	if reg.Len() != 1 {
+		t.Errorf("Len() = %d, want 1", reg.Len())
+	}
+
+	reg.Register(&allowPlugin{name: "b"}, nil)
+	reg.Register(&allowPlugin{name: "c"}, nil)
+	if reg.Len() != 3 {
+		t.Errorf("Len() = %d, want 3", reg.Len())
+	}
+
+	// Failed registration should not increase count.
+	reg.Register(&initFailPlugin{name: "bad"}, nil)
+	if reg.Len() != 3 {
+		t.Errorf("Len() = %d, want 3 after failed registration", reg.Len())
+	}
+
+	// Duplicate name should not increase count.
+	reg.Register(&allowPlugin{name: "a"}, nil)
+	if reg.Len() != 3 {
+		t.Errorf("Len() = %d, want 3 after duplicate registration", reg.Len())
+	}
+}
+
+// =============================================================================
+// cooldownFor edge cases
+// =============================================================================
+
+func TestCooldownFor_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		cycles int64
+		want   time.Duration
+	}{
+		{"zero cycles", 0, CircuitResetInterval},
+		{"negative cycles", -1, CircuitResetInterval},
+		{"cycle 1", 1, CircuitResetInterval},
+		{"cycle 2", 2, CircuitResetInterval * 2},
+		{"cycle 3", 3, CircuitResetInterval * 4},
+		{"cycle 4", 4, CircuitResetInterval * 8},
+		{"MaxDisableCycles", int64(MaxDisableCycles), cooldownFor(int64(MaxDisableCycles))},
+		{"very large (50)", 50, time.Hour},   // capped at 1 hour
+		{"very large (100)", 100, time.Hour}, // capped at 1 hour
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cooldownFor(tt.cycles)
+			if got != tt.want {
+				t.Errorf("cooldownFor(%d) = %v, want %v", tt.cycles, got, tt.want)
+			}
+			// Invariant: cooldown must never exceed 1 hour.
+			if got > time.Hour {
+				t.Errorf("cooldownFor(%d) = %v, exceeds 1 hour cap", tt.cycles, got)
+			}
+			// Invariant: cooldown must always be positive.
+			if got <= 0 {
+				t.Errorf("cooldownFor(%d) = %v, must be positive", tt.cycles, got)
+			}
+		})
 	}
 }
 
@@ -1176,7 +1366,7 @@ func BenchmarkRegistry_Evaluate_Allow(b *testing.B) {
 	reg.Register(&allowPlugin{name: "p2"}, nil)
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 		Paths:     []string{"/home/user/project/main.go"},
 	}
 	ctx := context.Background()
@@ -1193,21 +1383,21 @@ func BenchmarkRegistry_Evaluate_AllowWithRules(b *testing.B) {
 	defer reg.Close()
 
 	reg.Register(&allowPlugin{name: "p1"}, nil)
-	rules := make([]RuleSnapshot, 50) // typical rule count
-	for i := range rules {
-		rules[i] = RuleSnapshot{
+	ruleSnaps := make([]RuleSnapshot, 50) // typical rule count
+	for i := range ruleSnaps {
+		ruleSnaps[i] = RuleSnapshot{
 			Name:     fmt.Sprintf("rule-%d", i),
-			Source:   "builtin",
-			Severity: "critical",
-			Actions:  []string{"read", "write"},
+			Source:   rules.SourceBuiltin,
+			Severity: rules.SeverityCritical,
+			Actions:  []rules.Operation{rules.OpRead, rules.OpWrite},
 		}
 	}
 
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 		Paths:     []string{"/home/user/project/main.go"},
-		Rules:     rules,
+		Rules:     ruleSnaps,
 	}
 	ctx := context.Background()
 
@@ -1223,12 +1413,12 @@ func BenchmarkRegistry_Evaluate_Block(b *testing.B) {
 	defer reg.Close()
 
 	reg.Register(&blockPlugin{name: "blocker",
-		result: Result{RuleName: "test", Severity: "high", Message: "denied"},
+		result: Result{RuleName: "test", Severity: rules.SeverityHigh, Message: "denied"},
 	}, nil)
 
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 	}
 	ctx := context.Background()
 
@@ -1257,7 +1447,7 @@ func BenchmarkRegistry_Evaluate_Parallel(b *testing.B) {
 	reg.Register(&allowPlugin{name: "p1"}, nil)
 	req := Request{
 		ToolName:  "Bash",
-		Operation: "execute",
+		Operation: rules.OpExecute,
 	}
 	ctx := context.Background()
 

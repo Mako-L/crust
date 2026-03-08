@@ -62,6 +62,13 @@ const (
 	ActionAlert Action = "alert"
 )
 
+// ValidResponseActions is the set of valid response action types.
+var ValidResponseActions = map[Action]bool{
+	ActionBlock: true,
+	ActionLog:   true,
+	ActionAlert: true,
+}
+
 // Source represents the origin of a rule.
 type Source string
 

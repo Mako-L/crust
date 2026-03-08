@@ -1,9 +1,13 @@
+//go:generate go run ./cmd/schema-check
+
 package plugin
 
 import (
 	"context"
 	"encoding/json"
 	"slices"
+
+	"github.com/BakeLens/crust/internal/rules"
 )
 
 // Plugin is a late-stage protection layer (step 13+).
@@ -30,40 +34,71 @@ type Plugin interface {
 // Request is the data available to plugins.
 // All fields are read-only deep copies — safe for concurrent use.
 // Serialized as JSON over the wire protocol for external plugins.
+//
+// Every field is always present in the JSON encoding (no omitempty)
+// to eliminate ambiguity between "absent" and "zero value".
+//
+// Operation and Operations use rules.Operation — the same enum used
+// by the YAML rules engine — making the plugin protocol a strict
+// child of the rules type system.
 type Request struct {
-	ToolName   string          `json:"tool_name"`
-	Arguments  json.RawMessage `json:"arguments"`
-	Operation  string          `json:"operation"`
-	Operations []string        `json:"operations"`
-	Command    string          `json:"command"`
-	Paths      []string        `json:"paths"`
-	Hosts      []string        `json:"hosts"`
-	Content    string          `json:"content"`
-	Evasive    bool            `json:"evasive,omitempty"`
+	ToolName   string            `json:"tool_name"`
+	Arguments  json.RawMessage   `json:"arguments"`
+	Operation  rules.Operation   `json:"operation"`
+	Operations []rules.Operation `json:"operations"`
+	Command    string            `json:"command"`
+	Paths      []string          `json:"paths"`
+	Hosts      []string          `json:"hosts"`
+	Content    string            `json:"content"`
+	Evasive    bool              `json:"evasive"`
 
 	// Rules is a snapshot of all active engine rules at evaluation time.
 	// Plugins can use this for context-aware decisions (e.g., "is this path
 	// already protected by a builtin rule?"). Read-only; plugins cannot
-	// modify the engine's rules.
-	Rules []RuleSnapshot `json:"rules,omitempty"`
+	// modify the engine's rules. Always present (empty array if no rules).
+	Rules []RuleSnapshot `json:"rules"`
 }
 
 // RuleSnapshot is a read-only, JSON-safe view of an engine rule.
-// It contains everything a plugin needs without leaking internal types.
+// Fields use the same typed enums as the YAML rules engine
+// (rules.Source, rules.Severity, rules.Operation).
+//
+// Every field is always present in the JSON encoding (no omitempty)
+// to eliminate ambiguity between "absent" and "zero value".
 type RuleSnapshot struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Source      string   `json:"source"` // "builtin", "user", "cli"
-	Severity    string   `json:"severity"`
-	Priority    int      `json:"priority"`
-	Actions     []string `json:"actions"`               // "read", "write", "delete", "execute", "network", ...
-	BlockPaths  []string `json:"block_paths,omitempty"` // glob patterns
-	BlockExcept []string `json:"block_except,omitempty"`
-	BlockHosts  []string `json:"block_hosts,omitempty"`
-	Message     string   `json:"message"`
-	Locked      bool     `json:"locked"`
-	Enabled     bool     `json:"enabled"`
-	HitCount    int64    `json:"hit_count"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Source      rules.Source      `json:"source"`
+	Severity    rules.Severity    `json:"severity"`
+	Priority    int               `json:"priority"`
+	Actions     []rules.Operation `json:"actions"`
+	BlockPaths  []string          `json:"block_paths"`
+	BlockExcept []string          `json:"block_except"`
+	BlockHosts  []string          `json:"block_hosts"`
+	Message     string            `json:"message"`
+	Locked      bool              `json:"locked"`
+	Enabled     bool              `json:"enabled"`
+	HitCount    int64             `json:"hit_count"`
+}
+
+// SnapshotRule converts a rules.Rule to a plugin RuleSnapshot.
+// Centralizes the conversion logic between the two type systems.
+func SnapshotRule(r *rules.Rule) RuleSnapshot {
+	return RuleSnapshot{
+		Name:        r.Name,
+		Description: r.Description,
+		Source:      r.Source,
+		Severity:    r.GetSeverity(),
+		Priority:    r.GetPriority(),
+		Actions:     slices.Clone(r.Actions),
+		BlockPaths:  slices.Clone(r.GetBlockPaths()),
+		BlockExcept: slices.Clone(r.GetBlockExcept()),
+		BlockHosts:  slices.Clone(r.GetBlockHosts()),
+		Message:     r.Message,
+		Locked:      r.IsLocked(),
+		Enabled:     r.IsEnabled(),
+		HitCount:    r.HitCount,
+	}
 }
 
 // DeepCopy returns a copy of the request with all slices cloned.
@@ -75,47 +110,40 @@ func (r Request) DeepCopy() Request {
 	cp.Paths = slices.Clone(r.Paths)
 	cp.Hosts = slices.Clone(r.Hosts)
 	cp.Rules = slices.Clone(r.Rules)
+	// Clone inner slices of each RuleSnapshot to prevent shared backing arrays (Bug #4).
+	for i := range cp.Rules {
+		cp.Rules[i].Actions = slices.Clone(cp.Rules[i].Actions)
+		cp.Rules[i].BlockPaths = slices.Clone(cp.Rules[i].BlockPaths)
+		cp.Rules[i].BlockExcept = slices.Clone(cp.Rules[i].BlockExcept)
+		cp.Rules[i].BlockHosts = slices.Clone(cp.Rules[i].BlockHosts)
+	}
 	return cp
 }
 
 // Result describes why a plugin blocked a call.
 // Return nil from Evaluate to allow the call.
+//
+// Severity and Action use the same typed enums as the YAML rules engine.
 type Result struct {
-	Plugin   string `json:"plugin"`
-	RuleName string `json:"rule_name"`
-	Severity string `json:"severity"`
-	Action   string `json:"action,omitempty"` // block (default), log, alert
-	Message  string `json:"message"`
-}
-
-// ValidSeverities is the set of accepted severity values.
-var ValidSeverities = map[string]bool{
-	"critical": true,
-	"high":     true,
-	"warning":  true,
-	"info":     true,
-}
-
-// ValidActions is the set of accepted action values.
-var ValidActions = map[string]bool{
-	"block": true,
-	"log":   true,
-	"alert": true,
-	"":      true, // empty defaults to "block"
+	Plugin   string         `json:"plugin"`
+	RuleName string         `json:"rule_name"`
+	Severity rules.Severity `json:"severity"`
+	Action   rules.Action   `json:"action"`
+	Message  string         `json:"message"`
 }
 
 // EffectiveAction returns the action, defaulting to "block" if empty.
-func (r *Result) EffectiveAction() string {
+func (r *Result) EffectiveAction() rules.Action {
 	if r.Action == "" {
-		return "block"
+		return rules.ActionBlock
 	}
 	return r.Action
 }
 
 // EffectiveSeverity returns the severity, defaulting to "high" if invalid.
-func (r *Result) EffectiveSeverity() string {
-	if ValidSeverities[r.Severity] {
+func (r *Result) EffectiveSeverity() rules.Severity {
+	if rules.ValidSeverities[r.Severity] {
 		return r.Severity
 	}
-	return "high"
+	return rules.SeverityHigh
 }

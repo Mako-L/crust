@@ -1328,7 +1328,7 @@ func TestRetryAsNonStreaming_IndependentOfClientContext(t *testing.T) {
 		t.Fatalf("NewProxy: %v", err)
 	}
 
-	clientCtx, cancelClient := context.WithCancel(context.Background())
+	clientCtx, cancelClient := context.WithCancel(t.Context())
 	cancelClient() // cancel immediately — simulates client disconnect before retry
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"stream":true}`))

@@ -110,8 +110,9 @@ func cooldownFor(cycles int64) time.Duration {
 	return d
 }
 
-// Evaluate runs all healthy plugins in order through the worker pool.
-// Returns the first non-nil Result, or nil if all plugins allow the call.
+// Evaluate runs all healthy plugins concurrently through the worker pool.
+// Returns the first non-nil Result (block), or nil if all plugins allow.
+// Cancels remaining plugins once any plugin blocks.
 func (r *Registry) Evaluate(ctx context.Context, req Request) *Result {
 	if r.closing.Load() {
 		return nil // fail-open during shutdown
@@ -122,11 +123,52 @@ func (r *Registry) Evaluate(ctx context.Context, req Request) *Result {
 	states := r.states
 	r.mu.RUnlock()
 
-	for _, s := range states {
-		result := r.evaluateOne(ctx, s, req)
-		if result != nil {
-			return result
+	if len(states) == 0 {
+		return nil
+	}
+
+	// Fast path: single plugin, no goroutine overhead.
+	if len(states) == 1 {
+		return r.evaluateOne(ctx, states[0], req)
+	}
+
+	// Fan out all plugins concurrently; first block wins.
+	evalCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type indexedResult struct {
+		index  int
+		result *Result
+	}
+	results := make(chan indexedResult, len(states))
+
+	var wg sync.WaitGroup
+	for i, s := range states {
+		wg.Go(func() {
+			res := r.evaluateOne(evalCtx, s, req)
+			if res != nil {
+				results <- indexedResult{index: i, result: res}
+				cancel() // short-circuit remaining plugins
+			}
+		})
+	}
+
+	// Close results channel when all goroutines complete.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Return the first block result (lowest registration index wins ties).
+	var first *indexedResult
+	for ir := range results {
+		if first == nil || ir.index < first.index {
+			ir := ir
+			first = &ir
 		}
+	}
+	if first != nil {
+		return first.result
 	}
 	return nil
 }

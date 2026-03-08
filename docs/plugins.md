@@ -19,6 +19,10 @@ Plugins communicate over a **JSON wire protocol** (newline-delimited JSON over s
 
 ## Wire Protocol
 
+> **Formal specification:** [plugin-protocol.schema.json](plugin-protocol.schema.json) (JSON Schema draft 2020-12)
+>
+> Schema conformance is enforced at build time — `schema_test.go` validates that all Go types, fields, enums, and method constants match the schema. Any drift between the implementation and the specification fails the pre-commit check.
+
 Plugins are external processes. Communication is **newline-delimited JSON** over stdin/stdout (one JSON object per line, each direction):
 
 ```text
@@ -109,14 +113,16 @@ Sent with `method="evaluate"`. Contains everything the engine extracted during s
 |-------|------|-------------|
 | `tool_name` | string | Sanitized tool name (e.g. "Bash", "Read", "Write") |
 | `arguments` | object | Raw JSON arguments from the tool call |
-| `operation` | string | Primary operation: `read`, `write`, `delete`, `copy`, `move`, `execute`, `network` |
-| `operations` | string[] | All operations (a command may both read and write) |
+| `operation` | `rules.Operation` | Primary operation: `read`, `write`, `delete`, `copy`, `move`, `execute`, `network` |
+| `operations` | `[]rules.Operation` | All operations (a command may both read and write) |
 | `command` | string | Raw shell command (Bash tool only) |
 | `paths` | string[] | Normalized + symlink-resolved paths |
 | `hosts` | string[] | Extracted hostnames/IPs |
 | `content` | string | Write content or full raw JSON of all arguments |
 | `evasive` | bool | True if command uses shell tricks that prevent static analysis |
-| `rules` | RuleSnapshot[] | Read-only snapshot of all active engine rules |
+| `rules` | RuleSnapshot[] | Read-only snapshot of all active engine rules (always present, `[]` if none) |
+
+> **No optional fields.** Every field is always present in the JSON encoding. There is no distinction between "absent" and "zero value" — `false` is `false`, empty arrays are `[]`, empty strings are `""`. This eliminates a class of bugs where plugins check for field presence instead of value.
 
 ### RuleSnapshot
 
@@ -126,10 +132,10 @@ Each element in `rules` describes one engine rule:
 |-------|------|-------------|
 | `name` | string | Rule identifier (e.g. "protect-ssh-keys") |
 | `description` | string | Human-readable description |
-| `source` | string | `"builtin"`, `"user"`, or `"cli"` |
-| `severity` | string | `"critical"`, `"high"`, `"warning"`, `"info"` |
+| `source` | `rules.Source` | `"builtin"`, `"user"`, or `"cli"` |
+| `severity` | `rules.Severity` | `"critical"`, `"high"`, `"warning"`, `"info"` |
 | `priority` | int | Lower = higher priority (default 50) |
-| `actions` | string[] | Operations this rule applies to |
+| `actions` | `[]rules.Operation` | Operations this rule applies to |
 | `block_paths` | string[] | Glob patterns this rule blocks |
 | `block_except` | string[] | Exception patterns |
 | `block_hosts` | string[] | Host patterns for network rules |
@@ -137,6 +143,8 @@ Each element in `rules` describes one engine rule:
 | `locked` | bool | True if rule survives `--disable-builtin` |
 | `enabled` | bool | True if rule is active |
 | `hit_count` | int | Times this rule has matched |
+
+The `plugin.SnapshotRule(r *rules.Rule) RuleSnapshot` function centralizes the conversion from engine rules to snapshots, ensuring all fields are correctly mapped and slices are cloned.
 
 Plugins can use the rule snapshot for context-aware decisions, such as:
 - Checking if a path is already protected by a builtin rule
@@ -159,8 +167,8 @@ Returned to block a tool call. Return `null` to allow.
 | Field | Type | Description |
 |-------|------|-------------|
 | `rule_name` | string | Plugin-namespaced rule (e.g. "sandbox:fs-deny") |
-| `severity` | string | `"critical"`, `"high"`, `"warning"`, `"info"` (invalid defaults to `"high"`) |
-| `action` | string | `"block"` (default), `"log"`, or `"alert"` |
+| `severity` | `rules.Severity` | `"critical"`, `"high"`, `"warning"`, `"info"` (invalid defaults to `"high"`) |
+| `action` | `rules.Action` | `"block"` (default), `"log"`, or `"alert"` |
 | `message` | string | Human-readable reason |
 
 The `plugin` field is auto-filled by the registry — plugins don't need to set it.
@@ -190,21 +198,22 @@ Engine.Evaluate()
   ▼
 Registry.Evaluate(ctx, req)
   │
-  ├─▶ acquire slot from pool (with context timeout — no indefinite blocking)
+  ├─▶ fan out all plugins concurrently (each via worker pool)
   │     │
-  │     ▼
+  │     ▼ (per plugin goroutine)
+  │   acquire slot from pool (with context timeout — no indefinite blocking)
   │   goroutine {
   │     defer recover()           ← catches in-process panics
   │     ctx with timeout          ← passed to plugin for cooperative cancellation
-  │     result = plugin.Evaluate(ctx, req)
+  │     result = plugin.Evaluate(ctx, req.DeepCopy())
   │   }
   │     │
-  │     ├─▶ result received       → return result
+  │     ├─▶ block result          → send to results channel, cancel remaining plugins
   │     ├─▶ panic / crash         → log (with stack trace), increment failure count, skip plugin
   │     ├─▶ timeout exceeded      → log, increment failure count, skip plugin
   │     └─▶ pool exhausted        → log, skip plugin (NOT counted as plugin failure)
   │
-  ├─▶ next plugin ...
+  ├─▶ collect results — lowest registration index wins ties
   │
   └─▶ all plugins passed → return nil (allowed)
 ```
@@ -286,8 +295,8 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
         if pr := e.plugins.Evaluate(ctx, plugin.Request{
             ToolName:   call.Name,
             Arguments:  call.Arguments,
-            Operation:  string(info.Operation),
-            Operations: operationsToStrings(info.Operations),
+            Operation:  info.Operation,
+            Operations: info.Operations,
             Command:    info.Command,
             Paths:      allPaths,
             Hosts:      info.Hosts,
@@ -296,8 +305,8 @@ func (e *Engine) Evaluate(call ToolCall) MatchResult {
         }); pr != nil {
             return NewMatch(
                 pr.RuleName,
-                Severity(pr.EffectiveSeverity()),
-                Action(pr.EffectiveAction()),
+                pr.EffectiveSeverity(),
+                pr.EffectiveAction(),
                 pr.Message,
             )
         }
@@ -409,6 +418,7 @@ import (
     "time"
 
     "github.com/BakeLens/crust/internal/plugin"
+    "github.com/BakeLens/crust/internal/rules"
 )
 
 type Config struct {
@@ -453,7 +463,7 @@ func (r *RateLimiter) Evaluate(_ context.Context, req plugin.Request) *plugin.Re
     if len(r.window) >= r.config.MaxPerMinute {
         return &plugin.Result{
             RuleName: "ratelimit:exceeded",
-            Severity: "warning",
+            Severity: rules.SeverityWarning,
             Message:  fmt.Sprintf("rate limit exceeded: %d calls/min", r.config.MaxPerMinute),
         }
     }
@@ -473,7 +483,7 @@ func (r *RateLimiter) Close() error { return nil }
 
 2. **Late-stage only** — Plugins never weaken built-in protections. They run after all 13 built-in steps pass. A plugin can only block, never allow something the engine blocked.
 
-3. **First-block wins** — Plugins are evaluated in registration order. The first non-nil Result short-circuits evaluation.
+3. **First-block wins** — Plugins are evaluated concurrently. The first non-nil Result cancels remaining evaluations; when multiple plugins block simultaneously, the one with the lowest registration index wins.
 
 4. **OS-level crash isolation** — External plugins run as separate processes. A segfault, memory leak, or infinite loop in a plugin cannot crash the engine. The worker pool adds goroutine-level isolation with `recover()` + timeout on top.
 
@@ -481,11 +491,40 @@ func (r *RateLimiter) Close() error { return nil }
 
 6. **Rule snapshot access** — Plugins receive a read-only snapshot of all active engine rules. This enables context-aware decisions: "is this path already protected?", "are required rules enabled?", "what's the current hit count?"
 
-7. **No internal type leakage** — `Request` and `Result` use plain JSON types (`string`, `int`, `bool`), not Go-specific types. This keeps the wire protocol stable and language-agnostic.
+7. **Unified type system** — `Request` and `Result` share typed enums (`rules.Operation`, `rules.Severity`, `rules.Action`, `rules.Source`) with the YAML rules engine. These serialize to plain strings over the wire protocol, keeping external plugins language-agnostic while ensuring type safety in Go.
 
 8. **Validated results** — Invalid severity values default to `"high"`. Empty action defaults to `"block"`. Plugin names are cached at registration to prevent spoofing. Request data is deep-copied per plugin to prevent mutation.
 
 9. **Clean lifecycle** — `init` is called once at startup. `close` is called in reverse order during shutdown. The registry rejects new evaluations after close begins.
+
+---
+
+## Schema Validation
+
+The wire protocol has a formal [JSON Schema](plugin-protocol.schema.json) that serves as the single source of truth. Conformance between the Go implementation and the schema is enforced by `schema_test.go`, which runs in the pre-commit hook.
+
+### What is validated
+
+| Check | Description |
+|-------|-------------|
+| **Field match** | Every Go struct field (Request, Result, RuleSnapshot, InitParams) has a corresponding schema property, and vice versa |
+| **Severity enum** | `rules.ValidSeverities` map matches the schema `severity` enum exactly |
+| **Action enum** | `rules.ValidActions` map matches the schema `action` enum exactly |
+| **Method constants** | `MethodInit`, `MethodEvaluate`, `MethodClose` match the schema `wireRequest` method constants |
+| **Round-trip** | Go structs marshal to JSON containing all schema-required fields |
+| **Valid JSON** | The schema file itself is valid JSON |
+
+### Adding a new field
+
+1. Add the field to the Go struct (e.g. `Request` in `plugin.go`)
+2. Add the property to the schema (e.g. `evaluateRequest` in `plugin-protocol.schema.json`)
+3. Run `go test ./internal/plugin/ -run TestSchema` — it will fail if either side is missing
+
+### Adding a new enum value
+
+1. Add the value to the Go map (e.g. `rules.ValidSeverities` in `internal/rules/`)
+2. Add the value to the schema enum (e.g. `$defs/severity` in `plugin-protocol.schema.json`)
+3. Run `go test ./internal/plugin/ -run TestSchema` — it will fail if they don't match
 
 ---
 

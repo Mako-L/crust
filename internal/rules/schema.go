@@ -69,8 +69,8 @@ const (
 	OpNetwork Operation = "network"
 )
 
-// ValidActions is the set of all valid actions
-var ValidActions = map[Operation]bool{
+// ValidOperations is the set of all valid operation types.
+var ValidOperations = map[Operation]bool{
 	OpRead:    true,
 	OpWrite:   true,
 	OpDelete:  true,
@@ -133,7 +133,7 @@ func (r *Rule) Validate() error {
 	}
 
 	for _, op := range r.Actions {
-		if !ValidActions[op] {
+		if !ValidOperations[op] {
 			return fmt.Errorf("invalid action: %s", op)
 		}
 	}

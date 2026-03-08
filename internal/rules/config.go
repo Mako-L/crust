@@ -120,7 +120,7 @@ func (r *RuleConfig) Validate() error {
 	// Validate actions
 	for _, action := range r.Actions {
 		lower := strings.ToLower(action)
-		if lower != "all" && !ValidActions[Operation(lower)] {
+		if lower != "all" && !ValidOperations[Operation(lower)] {
 			return fmt.Errorf("unknown action: %q", action)
 		}
 	}
@@ -236,7 +236,7 @@ func parseActions(ops []string) []Operation {
 		if lower == "all" {
 			return AllOperations
 		}
-		if ValidActions[lower] {
+		if ValidOperations[lower] {
 			result = append(result, lower)
 		}
 	}

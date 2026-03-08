@@ -288,8 +288,8 @@ jobs:
             ln -sf /usr/local/go/bin/go    /usr/local/bin/go
             ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
             rm /tmp/go.tar.gz
-            # install.sh requires bash (uses BASH_SOURCE, source, &>/dev/null)
-            pkg install -y bash
+            # install.sh requires bash and git
+            pkg install -y bash git
           run: |
             go version
             # Test install.sh on FreeBSD (builds from source)

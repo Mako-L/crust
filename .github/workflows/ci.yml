@@ -44,6 +44,14 @@ jobs:
           go fix ./...
           git diff --exit-code || { echo "go fix found pending modernizations — run 'go fix ./...' locally and commit the changes"; exit 1; }
 
+      - name: go generate (schema drift check)
+        run: |
+          go generate ./...
+          git diff --exit-code || { echo "go generate produced changes — run 'go generate ./...' locally and commit"; exit 1; }
+
+      - name: rule-coverage (ensure rules have unit + fuzz tests)
+        run: bash scripts/check-rule-coverage.sh
+
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -533,6 +541,7 @@ jobs:
   docker-test:
     name: Docker
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 

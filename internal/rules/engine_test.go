@@ -300,8 +300,8 @@ func TestEngine_DisabledRules(t *testing.T) {
 	}
 
 	// Verify only enabled rule is loaded
-	if len(engine.GetCompiledRules()) != 1 {
-		t.Fatalf("Expected 1 rule (disabled rule should be skipped), got %d", len(engine.GetCompiledRules()))
+	if len(engine.getCompiledRules()) != 1 {
+		t.Fatalf("Expected 1 rule (disabled rule should be skipped), got %d", len(engine.getCompiledRules()))
 	}
 
 	// Test: enabled.txt should be blocked
@@ -610,7 +610,7 @@ func TestCompilePattern(t *testing.T) {
 }
 
 func TestExtractRules(t *testing.T) {
-	compiled := []CompiledRule{
+	compiled := []compiledRule{
 		{Rule: Rule{Name: "rule1"}},
 		{Rule: Rule{Name: "rule2"}},
 	}
@@ -668,16 +668,16 @@ func TestGetCompiledRules_DefensiveCopy(t *testing.T) {
 	}
 
 	// Get a copy and modify it
-	rules1 := engine.GetCompiledRules()
+	rules1 := engine.getCompiledRules()
 	if len(rules1) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules1))
 	}
 	rules1[0].Rule.Name = "MUTATED"
 
 	// Second call should still return the original
-	rules2 := engine.GetCompiledRules()
+	rules2 := engine.getCompiledRules()
 	if rules2[0].Rule.Name != "test-rule" {
-		t.Errorf("GetCompiledRules returned mutated data: got %q, want %q", rules2[0].Rule.Name, "test-rule")
+		t.Errorf("getCompiledRules returned mutated data: got %q, want %q", rules2[0].Rule.Name, "test-rule")
 	}
 }
 

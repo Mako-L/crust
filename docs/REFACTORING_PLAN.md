@@ -90,10 +90,10 @@ Same package, just file organization. No API changes.
 **Problem:** Engine handles compilation, matching, DLP, hot-reload, and statistics all in one file.
 
 **Fix:** Extract:
-- `compiler.go` — rule compilation (CompiledRule, CompiledMatch)
+- `compiler.go` — rule compilation (compiledRule, compiledMatch)
 - Keep `engine.go` as orchestrator (Evaluate, lifecycle)
 
-Unexport `CompiledMatch` and `CompiledRule` (verified: only used within rules package).
+**Status:** DONE — engine.go 924 lines, compiler.go 291 lines.
 
 **Effort:** M (1-2 days)
 
@@ -138,6 +138,8 @@ Currently pre-push only. Add to security job for PR coverage. **Status:** DONE
 ### P2-7: Unexport package-internal types
 `CompiledMatch`, `CompiledRule` (rules), `RequestBody` (httpproxy) — exported but only used internally. **Effort:** S
 
+**Status:** DONE — renamed to compiledMatch, compiledRule, requestBody, toolDefinition, requestMessage.
+
 ---
 
 ## Verified Non-Issues (No Action Needed)
@@ -156,6 +158,6 @@ Currently pre-push only. Add to security job for PR coverage. **Status:** DONE
 
 **Phase 1:** ~~P0-1 + P1-2~~ DONE
 **Phase 2:** ~~P1-1 + P1-7 + P2-4 + P2-5~~ DONE
-**Phase 3 (next):** P1-3 + P1-4 + P1-5 (interfaces, file splits)
+**Phase 3:** P1-3 + ~~P1-4 + P1-5~~ DONE (extractor split, engine split)
 **Phase 4:** P1-6 + P2-1 + P2-2 (DI refactor, proxy/storage splits)
-**Phase 5 (ongoing):** P2-3, P2-6, P2-7 (cleanup)
+**Phase 5:** P2-3, P2-6, ~~P2-7~~ DONE (cleanup)

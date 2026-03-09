@@ -18,6 +18,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+//go:generate go run builtin_verify.go
+
 //go:embed builtin/*.yaml
 var builtinFS embed.FS
 

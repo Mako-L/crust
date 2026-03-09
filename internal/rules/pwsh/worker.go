@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+//go:generate go run pwsh_verify.go
+
 //go:embed ps_bootstrap_header.ps1
 var psHeader string
 

@@ -112,7 +112,7 @@ jobs:
           /tmp/rules.fuzz -test.fuzz=FuzzNormalizeUnicode -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
           /tmp/rules.fuzz -test.fuzz=FuzzLoopbackRegex -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
           /tmp/rules.fuzz -test.fuzz=FuzzMCPToolBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
-          GOMEMLIMIT=4GiB /tmp/rules.fuzz -test.fuzz=FuzzPipeBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache -test.parallel=1
+          GOMEMLIMIT=2GiB /tmp/rules.fuzz -test.fuzz=FuzzPipeBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache -test.parallel=1
           /tmp/rules.fuzz -test.fuzz=FuzzConfusableBypass -test.fuzztime=30s -test.short -test.fuzzcachedir=/tmp/fuzz-cache
 
       - name: Fuzz tests (full suite, 10s each — parallelized)

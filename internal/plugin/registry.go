@@ -242,6 +242,11 @@ func (r *Registry) evaluateOne(ctx context.Context, s *pluginState, req Request)
 
 	if result != nil {
 		result.Plugin = s.name // use cached name (Bug 6.2 fix)
+		// Reject results with empty required fields (rule_name, message).
+		if err := result.Validate(); err != nil {
+			log.Warn("plugin %q: invalid result: %v", s.name, err)
+			return nil
+		}
 		// Validate severity/action — default to "high"/"block" if invalid.
 		if eff := result.EffectiveSeverity(); eff != result.Severity {
 			log.Warn("plugin %q: invalid severity %q, defaulting to %q", s.name, result.Severity, eff)

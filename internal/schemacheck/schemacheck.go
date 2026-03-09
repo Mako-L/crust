@@ -5,15 +5,27 @@
 package schemacheck
 
 import (
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 )
+
+// Embedded schema files — single source of truth for both go:generate
+// tools and conformance tests.
+
+//go:embed rules.schema.json
+var RulesSchema []byte
+
+//go:embed plugin-protocol.schema.json
+var PluginProtocolSchema []byte
 
 // SchemaDoc is a partial JSON Schema representation (draft 2020-12).
 type SchemaDoc struct {
@@ -42,14 +54,84 @@ func LoadSchema(path string) (*SchemaDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read schema %s: %w", path, err)
 	}
+	return LoadSchemaBytes(data)
+}
+
+// LoadSchemaBytes parses a JSON Schema from raw bytes.
+// Useful with go:embed for tests that don't depend on file paths.
+func LoadSchemaBytes(data []byte) (*SchemaDoc, error) {
 	if !json.Valid(data) {
-		return nil, fmt.Errorf("schema %s is not valid JSON", path)
+		return nil, errors.New("schema is not valid JSON")
 	}
 	var doc SchemaDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("unmarshal schema: %w", err)
 	}
 	return &doc, nil
+}
+
+// FindObjectOneOf finds the first oneOf variant with type "object" and returns its properties.
+func (d *SchemaDef) FindObjectOneOf() *SchemaDef {
+	for _, raw := range d.OneOf {
+		var s SchemaDef
+		if err := json.Unmarshal(raw, &s); err != nil {
+			continue
+		}
+		if s.Type == "object" {
+			return &s
+		}
+	}
+	return nil
+}
+
+// ExtractMethodConsts extracts method constants from wireRequest oneOf variants.
+func (d *SchemaDef) ExtractMethodConsts() []string {
+	type methodConst struct {
+		Properties struct {
+			Method struct {
+				Const string `json:"const"`
+			} `json:"method"`
+		} `json:"properties"`
+	}
+	var methods []string
+	for _, raw := range d.OneOf {
+		var mc methodConst
+		if err := json.Unmarshal(raw, &mc); err != nil {
+			continue
+		}
+		if mc.Properties.Method.Const != "" {
+			methods = append(methods, mc.Properties.Method.Const)
+		}
+	}
+	return methods
+}
+
+// JSONFieldNames returns the json tag names for a Go struct type using reflection.
+func JSONFieldNames(t reflect.Type) map[string]bool {
+	names := make(map[string]bool)
+	for field := range t.Fields() {
+		tag := field.Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		names[name] = true
+	}
+	return names
+}
+
+// CheckFieldsMatchT is a test helper that verifies Go struct fields match schema properties.
+func CheckFieldsMatchT(t interface{ Errorf(string, ...any) }, goFields map[string]bool, schemaProps map[string]SchemaProp, goName, schemaName string) {
+	for name := range goFields {
+		if _, ok := schemaProps[name]; !ok {
+			t.Errorf("Go %s field %q not in schema %s", goName, name, schemaName)
+		}
+	}
+	for name := range schemaProps {
+		if !goFields[name] {
+			t.Errorf("schema %s property %q not in Go %s", schemaName, name, goName)
+		}
+	}
 }
 
 // parseDir parses Go source files in dir, excluding test and generated files.

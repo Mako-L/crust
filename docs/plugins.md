@@ -19,7 +19,7 @@ Plugins communicate over a **JSON wire protocol** (newline-delimited JSON over s
 
 ## Wire Protocol
 
-> **Formal specification:** [plugin-protocol.schema.json](plugin-protocol.schema.json) (JSON Schema draft 2020-12)
+> **Formal specification:** [../internal/schemacheck/plugin-protocol.schema.json](../internal/schemacheck/plugin-protocol.schema.json) (JSON Schema draft 2020-12)
 >
 > Schema conformance is enforced at build time — `schema_test.go` validates that all Go types, fields, enums, and method constants match the schema. Any drift between the implementation and the specification fails the pre-commit check.
 
@@ -501,7 +501,7 @@ func (r *RateLimiter) Close() error { return nil }
 
 ## Schema Validation
 
-The wire protocol has a formal [JSON Schema](plugin-protocol.schema.json) that serves as the single source of truth. Conformance between the Go implementation and the schema is enforced by `schema_test.go`, which runs in the pre-commit hook.
+The wire protocol has a formal [JSON Schema](../internal/schemacheck/plugin-protocol.schema.json) that serves as the single source of truth. Conformance between the Go implementation and the schema is enforced by `schema_test.go`, which runs in the pre-commit hook.
 
 ### What is validated
 
@@ -517,13 +517,13 @@ The wire protocol has a formal [JSON Schema](plugin-protocol.schema.json) that s
 ### Adding a new field
 
 1. Add the field to the Go struct (e.g. `Request` in `plugin.go`)
-2. Add the property to the schema (e.g. `evaluateRequest` in `plugin-protocol.schema.json`)
+2. Add the property to the schema (e.g. `evaluateRequest` in `../internal/schemacheck/plugin-protocol.schema.json`)
 3. Run `go test ./internal/plugin/ -run TestSchema` — it will fail if either side is missing
 
 ### Adding a new enum value
 
 1. Add the value to the Go map (e.g. `rules.ValidSeverities` in `internal/rules/`)
-2. Add the value to the schema enum (e.g. `$defs/severity` in `plugin-protocol.schema.json`)
+2. Add the value to the schema enum (e.g. `$defs/severity` in `../internal/schemacheck/plugin-protocol.schema.json`)
 3. Run `go test ./internal/plugin/ -run TestSchema` — it will fail if they don't match
 
 ---

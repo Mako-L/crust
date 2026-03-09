@@ -2,75 +2,31 @@ package plugin
 
 import (
 	"encoding/json"
-	"os"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/BakeLens/crust/internal/rules"
+	"github.com/BakeLens/crust/internal/schemacheck"
 )
 
 // Schema conformance tests verify that Go types match the JSON Schema
-// at docs/plugin-protocol.schema.json. This catches drift between the
+// embedded in the schemacheck package. This catches drift between the
 // Go implementation and the formal protocol specification.
 
-const schemaPath = "../../docs/plugin-protocol.schema.json"
-
-// schemaDoc is a partial representation of the JSON Schema for validation.
-type schemaDoc struct {
-	Defs map[string]schemaDef `json:"$defs"`
-}
-
-type schemaDef struct {
-	Type       string                `json:"type"`
-	Required   []string              `json:"required"`
-	Properties map[string]schemaProp `json:"properties"`
-	Enum       []string              `json:"enum"`
-	OneOf      []json.RawMessage     `json:"oneOf"`
-}
-
-type schemaProp struct {
-	Type json.RawMessage `json:"type"` // string or array of strings
-	Ref  string          `json:"$ref"`
-}
-
-func loadSchema(t *testing.T) schemaDoc {
+func loadSchema(t *testing.T) *schemacheck.SchemaDoc {
 	t.Helper()
-	data, err := os.ReadFile(schemaPath)
+	doc, err := schemacheck.LoadSchemaBytes(schemacheck.PluginProtocolSchema)
 	if err != nil {
-		t.Fatalf("read schema: %v", err)
-	}
-	var doc schemaDoc
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("unmarshal schema: %v", err)
+		t.Fatalf("load schema: %v", err)
 	}
 	return doc
 }
 
-// jsonFieldNames returns the json tag names for a struct type.
-func jsonFieldNames(t reflect.Type) map[string]bool {
-	names := make(map[string]bool)
-	for field := range t.Fields() {
-		tag := field.Tag.Get("json")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		name, _, _ := strings.Cut(tag, ",")
-		names[name] = true
-	}
-	return names
-}
-
 // TestSchema_ValidJSON verifies the schema file is valid JSON.
 func TestSchema_ValidJSON(t *testing.T) {
-	data, err := os.ReadFile(schemaPath)
-	if err != nil {
-		t.Fatalf("read schema: %v", err)
-	}
-	if !json.Valid(data) {
-		t.Fatal("schema is not valid JSON")
-	}
+	// LoadSchema already validates JSON; just ensure it loads.
+	loadSchema(t)
 }
 
 // TestSchema_RequestFieldsMatch verifies that the Go Request struct fields
@@ -82,22 +38,8 @@ func TestSchema_RequestFieldsMatch(t *testing.T) {
 		t.Fatal("schema missing $defs/evaluateRequest")
 	}
 
-	goFields := jsonFieldNames(reflect.TypeFor[Request]())
-	schemaFields := make(map[string]bool)
-	for name := range evalReq.Properties {
-		schemaFields[name] = true
-	}
-
-	for name := range goFields {
-		if !schemaFields[name] {
-			t.Errorf("Go Request field %q not in schema evaluateRequest", name)
-		}
-	}
-	for name := range schemaFields {
-		if !goFields[name] {
-			t.Errorf("schema evaluateRequest property %q not in Go Request struct", name)
-		}
-	}
+	goFields := schemacheck.JSONFieldNames(reflect.TypeFor[Request]())
+	schemacheck.CheckFieldsMatchT(t, goFields, evalReq.Properties, "Request", "evaluateRequest")
 }
 
 // TestSchema_ResultFieldsMatch verifies that the Go Result struct fields
@@ -109,38 +51,13 @@ func TestSchema_ResultFieldsMatch(t *testing.T) {
 		t.Fatal("schema missing $defs/evaluateResult")
 	}
 
-	// evaluateResult uses oneOf [null, object]. Find the object variant.
-	var blockSchema schemaDef
-	for _, raw := range evalResult.OneOf {
-		var s schemaDef
-		if err := json.Unmarshal(raw, &s); err != nil {
-			continue
-		}
-		if s.Type == "object" {
-			blockSchema = s
-			break
-		}
-	}
-	if blockSchema.Properties == nil {
+	blockSchema := evalResult.FindObjectOneOf()
+	if blockSchema == nil {
 		t.Fatal("schema evaluateResult has no object variant")
 	}
 
-	goFields := jsonFieldNames(reflect.TypeFor[Result]())
-	schemaFields := make(map[string]bool)
-	for name := range blockSchema.Properties {
-		schemaFields[name] = true
-	}
-
-	for name := range goFields {
-		if !schemaFields[name] {
-			t.Errorf("Go Result field %q not in schema evaluateResult", name)
-		}
-	}
-	for name := range schemaFields {
-		if !goFields[name] {
-			t.Errorf("schema evaluateResult property %q not in Go Result struct", name)
-		}
-	}
+	goFields := schemacheck.JSONFieldNames(reflect.TypeFor[Result]())
+	schemacheck.CheckFieldsMatchT(t, goFields, blockSchema.Properties, "Result", "evaluateResult")
 }
 
 // TestSchema_RuleSnapshotFieldsMatch verifies that the Go RuleSnapshot struct
@@ -152,22 +69,8 @@ func TestSchema_RuleSnapshotFieldsMatch(t *testing.T) {
 		t.Fatal("schema missing $defs/ruleSnapshot")
 	}
 
-	goFields := jsonFieldNames(reflect.TypeFor[RuleSnapshot]())
-	schemaFields := make(map[string]bool)
-	for name := range ruleDef.Properties {
-		schemaFields[name] = true
-	}
-
-	for name := range goFields {
-		if !schemaFields[name] {
-			t.Errorf("Go RuleSnapshot field %q not in schema ruleSnapshot", name)
-		}
-	}
-	for name := range schemaFields {
-		if !goFields[name] {
-			t.Errorf("schema ruleSnapshot property %q not in Go RuleSnapshot struct", name)
-		}
-	}
+	goFields := schemacheck.JSONFieldNames(reflect.TypeFor[RuleSnapshot]())
+	schemacheck.CheckFieldsMatchT(t, goFields, ruleDef.Properties, "RuleSnapshot", "ruleSnapshot")
 }
 
 // TestSchema_InitParamsFieldsMatch verifies InitParams fields match.
@@ -178,22 +81,8 @@ func TestSchema_InitParamsFieldsMatch(t *testing.T) {
 		t.Fatal("schema missing $defs/initParams")
 	}
 
-	goFields := jsonFieldNames(reflect.TypeFor[InitParams]())
-	schemaFields := make(map[string]bool)
-	for name := range initDef.Properties {
-		schemaFields[name] = true
-	}
-
-	for name := range goFields {
-		if !schemaFields[name] {
-			t.Errorf("Go InitParams field %q not in schema initParams", name)
-		}
-	}
-	for name := range schemaFields {
-		if !goFields[name] {
-			t.Errorf("schema initParams property %q not in Go InitParams struct", name)
-		}
-	}
+	goFields := schemacheck.JSONFieldNames(reflect.TypeFor[InitParams]())
+	schemacheck.CheckFieldsMatchT(t, goFields, initDef.Properties, "InitParams", "initParams")
 }
 
 // TestSchema_SeverityEnumMatch verifies the schema severity enum matches ValidSeverities.
@@ -256,25 +145,7 @@ func TestSchema_MethodConstants(t *testing.T) {
 		MethodClose:    true,
 	}
 
-	// Extract method constants from oneOf variants.
-	type methodConst struct {
-		Properties struct {
-			Method struct {
-				Const string `json:"const"`
-			} `json:"method"`
-		} `json:"properties"`
-	}
-
-	var schemaMethods []string
-	for _, raw := range wireDef.OneOf {
-		var mc methodConst
-		if err := json.Unmarshal(raw, &mc); err != nil {
-			continue
-		}
-		if mc.Properties.Method.Const != "" {
-			schemaMethods = append(schemaMethods, mc.Properties.Method.Const)
-		}
-	}
+	schemaMethods := wireDef.ExtractMethodConsts()
 
 	for _, m := range schemaMethods {
 		if !goMethods[m] {

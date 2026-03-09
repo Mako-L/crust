@@ -1709,6 +1709,38 @@ func TestResult_Validate(t *testing.T) {
 	}
 }
 
+func TestRegistry_RejectsInvalidResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result Result
+	}{
+		{
+			name:   "empty rule_name",
+			result: Result{RuleName: "", Severity: rules.SeverityHigh, Message: "blocked"},
+		},
+		{
+			name:   "empty message",
+			result: Result{RuleName: "test:rule", Severity: rules.SeverityHigh, Message: ""},
+		},
+		{
+			name:   "both empty",
+			result: Result{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewPool(4, 5*time.Second))
+			defer reg.Close()
+
+			reg.Register(&blockPlugin{name: "invalid", result: tt.result}, nil)
+			got := reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
+			if got != nil {
+				t.Errorf("expected nil (invalid result discarded), got %+v", got)
+			}
+		})
+	}
+}
+
 func TestDeepCopy_NormalizesRuleSnapshotInnerSlices(t *testing.T) {
 	// RuleSnapshot inner slices should be normalized to empty after DeepCopy.
 	req := Request{

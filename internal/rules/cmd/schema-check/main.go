@@ -1,5 +1,5 @@
 // schema-check validates that Go rule types conform to the JSON Schema
-// at docs/rules.schema.json. Run via go generate.
+// embedded in the schemacheck package. Run via go generate.
 //
 // If validation passes, it writes schema_generated.go with the validation
 // timestamp. If CI runs `go generate ./... && git diff --exit-code`, any
@@ -16,18 +16,10 @@ import (
 	"github.com/BakeLens/crust/internal/schemacheck"
 )
 
-const (
-	schemaPath = "../../docs/rules.schema.json"
-	outputFile = "schema_generated.go"
-)
+const outputFile = "schema_generated.go"
 
 func main() {
-	absSchema, err := filepath.Abs(schemaPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "abs path %s: %v\n", schemaPath, err)
-		os.Exit(1)
-	}
-	doc, err := schemacheck.LoadSchema(absSchema)
+	doc, err := schemacheck.LoadSchemaBytes(schemacheck.RulesSchema)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
@@ -118,7 +110,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := schemacheck.WriteGenerated(outputFile, "rules", "docs/rules.schema.json"); err != nil {
+	if err := schemacheck.WriteGenerated(outputFile, "rules", "internal/schemacheck/rules.schema.json"); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputFile, err)
 		os.Exit(1)
 	}

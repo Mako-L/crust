@@ -909,3 +909,50 @@ func TestMatchRules_NoMatch(t *testing.T) {
 		t.Errorf("expected no match, got rule=%s", result.RuleName)
 	}
 }
+
+// TestEngine_DeterministicRuleOrder verifies that when multiple rules share
+// the same priority, the engine always picks the same winner (sorted by name).
+func TestEngine_DeterministicRuleOrder(t *testing.T) {
+	// All rules have the same default priority (50) but different names.
+	// The engine sorts by priority then by name, so "aaa-block" should always win.
+	rules := []Rule{
+		{
+			Name:    "ccc-block",
+			Actions: []Operation{OpRead},
+			Block:   Block{Paths: []string{"**/.secret"}},
+			Message: "blocked by ccc",
+		},
+		{
+			Name:    "aaa-block",
+			Actions: []Operation{OpRead},
+			Block:   Block{Paths: []string{"**/.secret"}},
+			Message: "blocked by aaa",
+		},
+		{
+			Name:    "bbb-block",
+			Actions: []Operation{OpRead},
+			Block:   Block{Paths: []string{"**/.secret"}},
+			Message: "blocked by bbb",
+		},
+	}
+
+	engine, err := NewTestEngine(rules)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	call := makeToolCall("Bash", map[string]any{
+		"command": "cat .secret",
+	})
+
+	// Run Evaluate multiple times and verify the same rule always wins.
+	for i := range 20 {
+		result := engine.Evaluate(call)
+		if !result.Matched {
+			t.Fatalf("iteration %d: expected match, got none", i)
+		}
+		if result.RuleName != "aaa-block" {
+			t.Fatalf("iteration %d: expected rule 'aaa-block', got '%s'", i, result.RuleName)
+		}
+	}
+}

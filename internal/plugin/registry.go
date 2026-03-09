@@ -118,11 +118,13 @@ func (r *Registry) Evaluate(ctx context.Context, req Request) *Result {
 		return nil // fail-open during shutdown
 	}
 
-	// Acquire read lock to safely iterate states — fixes Bug 1.3.
+	// Hold read lock for the entire evaluation so Close() blocks until
+	// all in-flight Evaluate calls complete. This prevents Close from
+	// calling plugin.Close() while evaluateOne is still running.
 	r.mu.RLock()
-	states := r.states
-	r.mu.RUnlock()
+	defer r.mu.RUnlock()
 
+	states := r.states
 	if len(states) == 0 {
 		return nil
 	}
@@ -284,14 +286,15 @@ func (r *Registry) Stats() []Stats {
 	defer r.mu.RUnlock()
 	stats := make([]Stats, len(r.states))
 	for i, s := range r.states {
+		cycles := s.disableCycles.Load()
 		stats[i] = Stats{
 			Name:          s.name,
 			Disabled:      s.disabled.Load(),
 			Failures:      s.failures.Load(),
 			TotalPanics:   s.totalPanics.Load(),
 			TotalTimeouts: s.totalTimeouts.Load(),
-			DisableCycles: s.disableCycles.Load(),
-			Permanent:     s.disableCycles.Load() >= maxDisableCycles,
+			DisableCycles: cycles,
+			Permanent:     cycles >= maxDisableCycles,
 		}
 	}
 	return stats

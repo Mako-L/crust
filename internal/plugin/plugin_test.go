@@ -1507,3 +1507,150 @@ func BenchmarkRegistry_Evaluate_Parallel(b *testing.B) {
 		}
 	})
 }
+
+// =============================================================================
+// Bug: Close/Evaluate race — Close must wait for in-flight Evaluate calls
+// =============================================================================
+
+// slowPlugin sleeps for a duration then returns a result.
+type slowPlugin struct {
+	name    string
+	delay   time.Duration
+	result  Result
+	closed  atomic.Bool
+	evalRan atomic.Bool
+}
+
+func (p *slowPlugin) Name() string               { return p.name }
+func (p *slowPlugin) Init(json.RawMessage) error { return nil }
+func (p *slowPlugin) Close() error               { p.closed.Store(true); return nil }
+func (p *slowPlugin) Evaluate(_ context.Context, _ Request) *Result {
+	p.evalRan.Store(true)
+	time.Sleep(p.delay)
+	// If Close() ran before Evaluate finished, the plugin is in an invalid state.
+	if p.closed.Load() {
+		panic("Evaluate called on closed plugin")
+	}
+	r := p.result
+	return &r
+}
+
+func TestRegistry_CloseWaitsForInFlightEvaluate(t *testing.T) {
+	reg := NewRegistry(NewPool(4, 5*time.Second))
+
+	sp := &slowPlugin{
+		name:   "slow",
+		delay:  100 * time.Millisecond,
+		result: Result{RuleName: "slow:block", Severity: rules.SeverityHigh, Message: "slow"},
+	}
+	reg.Register(sp, nil)
+
+	// Start Evaluate in a goroutine — it will take 100ms.
+	var wg sync.WaitGroup
+	var result *Result
+	wg.Go(func() {
+		result = reg.Evaluate(t.Context(), Request{ToolName: "Bash"})
+	})
+
+	// Give Evaluate a head start to acquire the RLock.
+	time.Sleep(10 * time.Millisecond)
+
+	// Close should block until Evaluate finishes (not close the plugin mid-evaluation).
+	reg.Close()
+
+	wg.Wait()
+
+	if !sp.evalRan.Load() {
+		t.Error("plugin Evaluate should have run")
+	}
+	// The key assertion: no panic from slowPlugin.Evaluate means Close waited.
+	if result == nil {
+		t.Error("expected non-nil result from slow plugin")
+	}
+}
+
+// =============================================================================
+// Bug: nil slices marshal as null instead of []
+// =============================================================================
+
+func TestRequest_NilSlicesMarshalAsEmptyArrays(t *testing.T) {
+	req := Request{
+		ToolName: "Bash",
+		// All slice fields left nil.
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, field := range []string{"operations", "paths", "hosts", "rules"} {
+		v, ok := raw[field]
+		if !ok {
+			t.Errorf("field %q missing from JSON", field)
+			continue
+		}
+		if string(v) == "null" {
+			t.Errorf("field %q is null, want [] (empty array)", field)
+		}
+	}
+}
+
+func TestRuleSnapshot_NilSlicesMarshalAsEmptyArrays(t *testing.T) {
+	snap := RuleSnapshot{Name: "test"}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	for _, field := range []string{"actions", "block_paths", "block_except", "block_hosts"} {
+		v, ok := raw[field]
+		if !ok {
+			t.Errorf("field %q missing from JSON", field)
+			continue
+		}
+		if string(v) == "null" {
+			t.Errorf("field %q is null, want [] (empty array)", field)
+		}
+	}
+}
+
+// =============================================================================
+// Bug: Stats reads disableCycles twice non-atomically
+// =============================================================================
+
+func TestRegistry_StatsConsistency(t *testing.T) {
+	pool := NewPool(4, 50*time.Millisecond)
+	reg := NewRegistry(pool)
+	defer reg.Close()
+
+	reg.Register(&panicPlugin{name: "crasher"}, nil)
+	ctx := t.Context()
+
+	// Drive to exactly maxConsecutiveFailures to disable.
+	for range maxConsecutiveFailures {
+		reg.Evaluate(ctx, Request{ToolName: "Bash"})
+	}
+
+	stats := reg.Stats()
+	if len(stats) == 0 {
+		t.Fatal("expected stats")
+	}
+	s := stats[0]
+
+	// Permanent must be consistent with DisableCycles.
+	wantPermanent := s.DisableCycles >= maxDisableCycles
+	if s.Permanent != wantPermanent {
+		t.Errorf("Stats inconsistency: DisableCycles=%d, Permanent=%v (want %v)",
+			s.DisableCycles, s.Permanent, wantPermanent)
+	}
+}

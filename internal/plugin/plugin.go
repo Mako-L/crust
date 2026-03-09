@@ -101,6 +101,51 @@ func SnapshotRule(r *rules.Rule) RuleSnapshot {
 	}
 }
 
+// MarshalJSON ensures nil slices are encoded as [] not null.
+func (r Request) MarshalJSON() ([]byte, error) {
+	if r.Operations == nil {
+		r.Operations = []rules.Operation{}
+	}
+	if r.Paths == nil {
+		r.Paths = []string{}
+	}
+	if r.Hosts == nil {
+		r.Hosts = []string{}
+	}
+	if r.Rules == nil {
+		r.Rules = []RuleSnapshot{}
+	}
+	for i := range r.Rules {
+		r.Rules[i] = ensureRuleSlices(r.Rules[i])
+	}
+	type noMethod Request // prevent infinite recursion
+	return json.Marshal(noMethod(r))
+}
+
+// MarshalJSON ensures nil slices are encoded as [] not null.
+func (r RuleSnapshot) MarshalJSON() ([]byte, error) {
+	r = ensureRuleSlices(r)
+	type noMethod RuleSnapshot
+	return json.Marshal(noMethod(r))
+}
+
+// ensureRuleSlices normalizes nil slices to empty in a RuleSnapshot.
+func ensureRuleSlices(r RuleSnapshot) RuleSnapshot {
+	if r.Actions == nil {
+		r.Actions = []rules.Operation{}
+	}
+	if r.BlockPaths == nil {
+		r.BlockPaths = []string{}
+	}
+	if r.BlockExcept == nil {
+		r.BlockExcept = []string{}
+	}
+	if r.BlockHosts == nil {
+		r.BlockHosts = []string{}
+	}
+	return r
+}
+
 // DeepCopy returns a copy of the request with all slices cloned.
 // Prevents a plugin from mutating data seen by subsequent plugins.
 func (r Request) DeepCopy() Request {

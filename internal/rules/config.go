@@ -261,7 +261,7 @@ func (rs *RuleSetConfig) Validate() error {
 			return fmt.Errorf("rule[%d] %q: %w", i, rule.Name, err)
 		}
 		name := rule.Name
-		if name == "" {
+		if name == "" && len(rule.Block) > 0 {
 			name = generateName(rule.Block[0])
 		}
 		if names[name] {

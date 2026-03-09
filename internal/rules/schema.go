@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Rule types for path-based security rules
@@ -136,7 +137,7 @@ func (r *Rule) Validate() error {
 	}
 
 	for _, op := range r.Actions {
-		if !ValidOperations[op] {
+		if !ValidOperations[Operation(strings.ToLower(string(op)))] {
 			return fmt.Errorf("invalid action: %s", op)
 		}
 	}

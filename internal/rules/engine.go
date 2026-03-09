@@ -868,9 +868,12 @@ func (e *Engine) rebuildMergedLocked() {
 	all = append(all, e.builtin...)
 	all = append(all, e.user...)
 
-	// Sort by priority (lower = higher priority)
-	slices.SortFunc(all, func(a, b compiledRule) int {
-		return cmp.Compare(a.Rule.GetPriority(), b.Rule.GetPriority())
+	// Sort by priority (lower = higher priority), then by name for determinism.
+	slices.SortStableFunc(all, func(a, b compiledRule) int {
+		if c := cmp.Compare(a.Rule.GetPriority(), b.Rule.GetPriority()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Rule.Name, b.Rule.Name)
 	})
 
 	e.merged = all

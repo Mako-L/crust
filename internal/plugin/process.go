@@ -140,6 +140,10 @@ func (p *ProcessPlugin) Evaluate(ctx context.Context, req Request) *Result {
 		log.Warn("plugin %q: unmarshal result: %v", p.name, err)
 		return nil
 	}
+	if err := result.Validate(); err != nil {
+		log.Warn("plugin %q: invalid result: %v", p.name, err)
+		return nil
+	}
 	return &result
 }
 

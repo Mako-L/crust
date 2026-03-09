@@ -243,8 +243,14 @@ func (r *Registry) evaluateOne(ctx context.Context, s *pluginState, req Request)
 	if result != nil {
 		result.Plugin = s.name // use cached name (Bug 6.2 fix)
 		// Validate severity/action — default to "high"/"block" if invalid.
-		result.Severity = result.EffectiveSeverity()
-		result.Action = result.EffectiveAction()
+		if eff := result.EffectiveSeverity(); eff != result.Severity {
+			log.Warn("plugin %q: invalid severity %q, defaulting to %q", s.name, result.Severity, eff)
+			result.Severity = eff
+		}
+		if eff := result.EffectiveAction(); eff != result.Action {
+			log.Warn("plugin %q: invalid action %q, defaulting to %q", s.name, result.Action, eff)
+			result.Action = eff
+		}
 		return result
 	}
 	return nil

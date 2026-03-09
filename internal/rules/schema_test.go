@@ -285,6 +285,19 @@ func TestValidateRuleSet(t *testing.T) {
 	})
 }
 
+func TestRule_Validate_CaseInsensitiveActions(t *testing.T) {
+	// Rule.Validate should accept uppercase operations (matching YAML path behavior).
+	r := Rule{
+		Name:    "test",
+		Message: "test",
+		Actions: []Operation{"READ"},
+		Block:   Block{Paths: []string{"*"}},
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Rule.Validate rejected uppercase operation: %v", err)
+	}
+}
+
 func TestOperation_Constants(t *testing.T) {
 	// Verify all operations are in ValidOperations
 	ops := []Operation{OpRead, OpWrite, OpDelete, OpCopy, OpMove, OpExecute, OpNetwork}

@@ -206,6 +206,7 @@
             },
             "rule_name": {
               "type": "string",
+              "minLength": 1,
               "description": "Plugin-namespaced rule name (e.g. \"sandbox:fs-deny\").",
               "examples": ["sandbox:fs-deny", "ratelimit:exceeded"]
             },
@@ -221,6 +222,7 @@
             },
             "message": {
               "type": "string",
+              "minLength": 1,
               "description": "Human-readable reason for blocking.",
               "examples": ["path /etc is outside sandbox", "rate limit exceeded: 10 calls/min"]
             }

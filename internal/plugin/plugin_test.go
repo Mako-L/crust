@@ -214,11 +214,24 @@ func TestRequest_DeepCopy(t *testing.T) {
 	}
 }
 
-func TestRequest_DeepCopy_NilSlices(t *testing.T) {
+func TestRequest_DeepCopy_NormalizesNilSlices(t *testing.T) {
 	original := Request{ToolName: "Read"}
 	cp := original.DeepCopy()
-	if cp.Paths != nil || cp.Hosts != nil || cp.Operations != nil || cp.Arguments != nil || cp.Rules != nil {
-		t.Error("DeepCopy should preserve nil slices")
+	// DeepCopy normalizes nil slices to empty (matching wire protocol invariant).
+	if cp.Paths == nil {
+		t.Error("DeepCopy should normalize nil Paths to empty")
+	}
+	if cp.Hosts == nil {
+		t.Error("DeepCopy should normalize nil Hosts to empty")
+	}
+	if cp.Operations == nil {
+		t.Error("DeepCopy should normalize nil Operations to empty")
+	}
+	if cp.Arguments == nil {
+		t.Error("DeepCopy should normalize nil Arguments to empty")
+	}
+	if cp.Rules == nil {
+		t.Error("DeepCopy should normalize nil Rules to empty")
 	}
 }
 
@@ -1652,5 +1665,71 @@ func TestRegistry_StatsConsistency(t *testing.T) {
 	if s.Permanent != wantPermanent {
 		t.Errorf("Stats inconsistency: DisableCycles=%d, Permanent=%v (want %v)",
 			s.DisableCycles, s.Permanent, wantPermanent)
+	}
+}
+
+// =============================================================================
+// Result.Validate tests
+// =============================================================================
+
+func TestResult_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  Result
+		wantErr bool
+	}{
+		{
+			name:    "valid result",
+			result:  Result{RuleName: "test:rule", Message: "blocked"},
+			wantErr: false,
+		},
+		{
+			name:    "empty rule_name",
+			result:  Result{RuleName: "", Message: "blocked"},
+			wantErr: true,
+		},
+		{
+			name:    "empty message",
+			result:  Result{RuleName: "test:rule", Message: ""},
+			wantErr: true,
+		},
+		{
+			name:    "both empty",
+			result:  Result{},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.result.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestDeepCopy_NormalizesRuleSnapshotInnerSlices(t *testing.T) {
+	// RuleSnapshot inner slices should be normalized to empty after DeepCopy.
+	req := Request{
+		ToolName: "Bash",
+		Rules: []RuleSnapshot{{
+			Name: "test",
+			// All inner slices nil
+		}},
+	}
+	cp := req.DeepCopy()
+	rs := cp.Rules[0]
+	if rs.Actions == nil {
+		t.Error("expected Actions to be non-nil after DeepCopy")
+	}
+	if rs.BlockPaths == nil {
+		t.Error("expected BlockPaths to be non-nil after DeepCopy")
+	}
+	if rs.BlockExcept == nil {
+		t.Error("expected BlockExcept to be non-nil after DeepCopy")
+	}
+	if rs.BlockHosts == nil {
+		t.Error("expected BlockHosts to be non-nil after DeepCopy")
 	}
 }

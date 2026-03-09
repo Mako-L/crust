@@ -331,6 +331,45 @@ func TestSchema_RoundTrip_Request(t *testing.T) {
 	}
 }
 
+// TestSchema_ResultRequiredFieldsNonEmpty verifies that the schema requires
+// non-empty rule_name and message (minLength: 1), matching Go's Result.Validate().
+func TestSchema_ResultRequiredFieldsNonEmpty(t *testing.T) {
+	doc := loadSchema(t)
+	evalResult, ok := doc.Defs["evaluateResult"]
+	if !ok {
+		t.Fatal("schema missing $defs/evaluateResult")
+	}
+
+	// Find the block (object) variant
+	type propWithMinLen struct {
+		Type      string `json:"type"`
+		MinLength *int   `json:"minLength"`
+	}
+	type objSchema struct {
+		Type       string                    `json:"type"`
+		Properties map[string]propWithMinLen `json:"properties"`
+	}
+
+	for _, raw := range evalResult.OneOf {
+		var s objSchema
+		if err := json.Unmarshal(raw, &s); err != nil || s.Type != "object" {
+			continue
+		}
+		for _, field := range []string{"rule_name", "message"} {
+			prop, ok := s.Properties[field]
+			if !ok {
+				t.Errorf("schema evaluateResult missing %q property", field)
+				continue
+			}
+			if prop.MinLength == nil || *prop.MinLength < 1 {
+				t.Errorf("schema evaluateResult.%s should have minLength >= 1 (matching Go Result.Validate)", field)
+			}
+		}
+		return
+	}
+	t.Fatal("schema evaluateResult has no object variant")
+}
+
 // TestSchema_RoundTrip_WireRequest verifies WireRequest marshals correctly.
 func TestSchema_RoundTrip_WireRequest(t *testing.T) {
 	for _, method := range []string{MethodInit, MethodEvaluate, MethodClose} {

@@ -5,6 +5,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 
 	"github.com/BakeLens/crust/internal/rules"
@@ -146,23 +147,51 @@ func ensureRuleSlices(r RuleSnapshot) RuleSnapshot {
 	return r
 }
 
-// DeepCopy returns a copy of the request with all slices cloned.
+// DeepCopy returns a copy of the request with all slices cloned and
+// nil slices normalized to empty (matching the JSON wire protocol invariant).
 // Prevents a plugin from mutating data seen by subsequent plugins.
 func (r Request) DeepCopy() Request {
 	cp := r
-	cp.Arguments = slices.Clone(r.Arguments)
-	cp.Operations = slices.Clone(r.Operations)
-	cp.Paths = slices.Clone(r.Paths)
-	cp.Hosts = slices.Clone(r.Hosts)
+	cp.Arguments = cloneOrEmpty(r.Arguments)
+	cp.Operations = cloneOpsOrEmpty(r.Operations)
+	cp.Paths = cloneStrOrEmpty(r.Paths)
+	cp.Hosts = cloneStrOrEmpty(r.Hosts)
 	cp.Rules = slices.Clone(r.Rules)
-	// Clone inner slices of each RuleSnapshot to prevent shared backing arrays (Bug #4).
+	if cp.Rules == nil {
+		cp.Rules = []RuleSnapshot{}
+	}
+	// Clone inner slices of each RuleSnapshot to prevent shared backing arrays.
 	for i := range cp.Rules {
-		cp.Rules[i].Actions = slices.Clone(cp.Rules[i].Actions)
-		cp.Rules[i].BlockPaths = slices.Clone(cp.Rules[i].BlockPaths)
-		cp.Rules[i].BlockExcept = slices.Clone(cp.Rules[i].BlockExcept)
-		cp.Rules[i].BlockHosts = slices.Clone(cp.Rules[i].BlockHosts)
+		cp.Rules[i].Actions = cloneOpsOrEmpty(cp.Rules[i].Actions)
+		cp.Rules[i].BlockPaths = cloneStrOrEmpty(cp.Rules[i].BlockPaths)
+		cp.Rules[i].BlockExcept = cloneStrOrEmpty(cp.Rules[i].BlockExcept)
+		cp.Rules[i].BlockHosts = cloneStrOrEmpty(cp.Rules[i].BlockHosts)
 	}
 	return cp
+}
+
+// cloneOrEmpty clones a byte slice, returning empty (not nil) if nil.
+func cloneOrEmpty(b []byte) []byte {
+	if b == nil {
+		return []byte{}
+	}
+	return slices.Clone(b)
+}
+
+// cloneStrOrEmpty clones a string slice, returning empty (not nil) if nil.
+func cloneStrOrEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return slices.Clone(s)
+}
+
+// cloneOpsOrEmpty clones an operation slice, returning empty (not nil) if nil.
+func cloneOpsOrEmpty(ops []rules.Operation) []rules.Operation {
+	if ops == nil {
+		return []rules.Operation{}
+	}
+	return slices.Clone(ops)
 }
 
 // Result describes why a plugin blocked a call.
@@ -175,6 +204,18 @@ type Result struct {
 	Severity rules.Severity `json:"severity"`
 	Action   rules.Action   `json:"action"`
 	Message  string         `json:"message"`
+}
+
+// Validate checks that required fields are non-empty.
+// Returns an error if the result would be meaningless (empty rule_name or message).
+func (r *Result) Validate() error {
+	if r.RuleName == "" {
+		return errors.New("result rule_name must not be empty")
+	}
+	if r.Message == "" {
+		return errors.New("result message must not be empty")
+	}
+	return nil
 }
 
 // EffectiveAction returns the action, defaulting to "block" if empty or invalid.

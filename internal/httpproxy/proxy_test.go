@@ -2388,7 +2388,6 @@ rules:
   - name: block-bash
     match:
       tool: Bash
-    action: block
     message: "Bash blocked"
 `)
 	defer cleanup()

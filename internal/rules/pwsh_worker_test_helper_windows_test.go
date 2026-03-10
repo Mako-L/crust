@@ -3,6 +3,7 @@
 package rules
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -37,12 +38,12 @@ var (
 // The worker is created once and reused; callers must NOT call stop().
 func getSharedPwshWorker(t *testing.T) *pwshWorkerTestHelper {
 	t.Helper()
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh.exe / powershell.exe not found")
 	}
 	sharedPwshOnce.Do(func() {
-		w, err := pwsh.NewWorker(pwshPath)
+		w, err := pwsh.NewWorker(context.Background(), pwshPath)
 		if err != nil {
 			sharedPwshErr = err
 			return
@@ -58,7 +59,7 @@ func getSharedPwshWorker(t *testing.T) *pwshWorkerTestHelper {
 // newPwshWorker creates a new pwshWorkerTestHelper backed by a real pwsh.Worker.
 // Used by tests that need their own isolated worker (e.g. Extractor integration tests).
 func newPwshWorker(pwshPath string) (*pwshWorkerTestHelper, error) {
-	w, err := pwsh.NewWorker(pwshPath)
+	w, err := pwsh.NewWorker(context.Background(), pwshPath)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -9,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/rules/pwsh"
 )
 
 func TestExtract_DirectToolCalls(t *testing.T) {
@@ -4078,12 +4081,12 @@ func TestPSCmdletAlias_Lookup(t *testing.T) {
 // by the pwsh worker (ps_bootstrap_dotnet.ps1); the bash parser cannot parse
 // this syntax and flags it as evasive. Requires pwsh.exe to be available.
 func TestCommandDB_DotNetAPIs(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("skipping: pwsh.exe / powershell.exe not found — .NET API detection requires the pwsh worker")
 	}
 	ext := NewExtractor()
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		t.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()

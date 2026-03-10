@@ -3,15 +3,17 @@ package security
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/eventlog"
 )
 
 func TestMetricsCountAccuracy(t *testing.T) {
-	globalMetrics.Reset()
+	eventlog.GetMetrics().Reset()
 
-	// 3 Layer 0 blocked events
+	// 3 proxy request blocked events
 	for range 3 {
-		RecordEvent(Event{
-			Layer:      LayerL0,
+		eventlog.Record(eventlog.Event{
+			Layer:      eventlog.LayerProxyRequest,
 			ToolName:   "Read",
 			Arguments:  json.RawMessage(`{"path":"/etc/shadow"}`),
 			WasBlocked: true,
@@ -19,40 +21,40 @@ func TestMetricsCountAccuracy(t *testing.T) {
 		})
 	}
 
-	// 2 Layer 1 blocked events (one non-streaming, one buffered)
-	RecordEvent(Event{
-		Layer:      LayerL1,
+	// 2 proxy response blocked events (one non-streaming, one buffered)
+	eventlog.Record(eventlog.Event{
+		Layer:      eventlog.LayerProxyResponse,
 		ToolName:   "Bash",
 		Arguments:  json.RawMessage(`{"command":"rm -rf /"}`),
 		WasBlocked: true,
 		RuleName:   "test-rule",
 	})
-	RecordEvent(Event{
-		Layer:      LayerL1Buffer,
+	eventlog.Record(eventlog.Event{
+		Layer:      eventlog.LayerProxyBuffer,
 		ToolName:   "Write",
 		Arguments:  json.RawMessage(`{"path":"/etc/passwd"}`),
 		WasBlocked: true,
 		RuleName:   "test-rule",
 	})
 
-	// 1 Layer 1 allowed event
-	RecordEvent(Event{
-		Layer:      LayerL1,
+	// 1 proxy response allowed event
+	eventlog.Record(eventlog.Event{
+		Layer:      eventlog.LayerProxyResponse,
 		ToolName:   "Read",
 		Arguments:  json.RawMessage(`{"path":"README.md"}`),
 		WasBlocked: false,
 	})
 
-	m := GetMetrics()
+	m := eventlog.GetMetrics()
 
-	if got := m.Layer0Blocks.Load(); got != 3 {
-		t.Errorf("Layer0Blocks = %d, want 3", got)
+	if got := m.ProxyRequestBlocks.Load(); got != 3 {
+		t.Errorf("ProxyRequestBlocks = %d, want 3", got)
 	}
-	if got := m.Layer1Blocks.Load(); got != 2 {
-		t.Errorf("Layer1Blocks = %d, want 2", got)
+	if got := m.ProxyResponseBlocks.Load(); got != 2 {
+		t.Errorf("ProxyResponseBlocks = %d, want 2", got)
 	}
-	if got := m.Layer1Allowed.Load(); got != 1 {
-		t.Errorf("Layer1Allowed = %d, want 1", got)
+	if got := m.ProxyResponseAllowed.Load(); got != 1 {
+		t.Errorf("ProxyResponseAllowed = %d, want 1", got)
 	}
 	if got := m.TotalToolCalls.Load(); got != 6 {
 		t.Errorf("TotalToolCalls = %d, want 6", got)
@@ -60,24 +62,24 @@ func TestMetricsCountAccuracy(t *testing.T) {
 }
 
 func TestMetricsReset(t *testing.T) {
-	m := GetMetrics()
+	m := eventlog.GetMetrics()
 
 	// Populate counters
-	m.Layer0Blocks.Add(5)
-	m.Layer1Blocks.Add(3)
-	m.Layer1Allowed.Add(7)
+	m.ProxyRequestBlocks.Add(5)
+	m.ProxyResponseBlocks.Add(3)
+	m.ProxyResponseAllowed.Add(7)
 	m.TotalToolCalls.Add(15)
 
 	m.Reset()
 
-	if got := m.Layer0Blocks.Load(); got != 0 {
-		t.Errorf("Layer0Blocks after reset = %d, want 0", got)
+	if got := m.ProxyRequestBlocks.Load(); got != 0 {
+		t.Errorf("ProxyRequestBlocks after reset = %d, want 0", got)
 	}
-	if got := m.Layer1Blocks.Load(); got != 0 {
-		t.Errorf("Layer1Blocks after reset = %d, want 0", got)
+	if got := m.ProxyResponseBlocks.Load(); got != 0 {
+		t.Errorf("ProxyResponseBlocks after reset = %d, want 0", got)
 	}
-	if got := m.Layer1Allowed.Load(); got != 0 {
-		t.Errorf("Layer1Allowed after reset = %d, want 0", got)
+	if got := m.ProxyResponseAllowed.Load(); got != 0 {
+		t.Errorf("ProxyResponseAllowed after reset = %d, want 0", got)
 	}
 	if got := m.TotalToolCalls.Load(); got != 0 {
 		t.Errorf("TotalToolCalls after reset = %d, want 0", got)
@@ -85,17 +87,17 @@ func TestMetricsReset(t *testing.T) {
 }
 
 func TestBlockedTotal(t *testing.T) {
-	globalMetrics.Reset()
+	eventlog.GetMetrics().Reset()
 
 	// Record events at different layers
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Bash", WasBlocked: true, RuleName: "r2"})
-	RecordEvent(Event{Layer: LayerL1Stream, ToolName: "Write", WasBlocked: true, RuleName: "r3"})
-	RecordEvent(Event{Layer: LayerL1Buffer, ToolName: "Edit", WasBlocked: true, RuleName: "r4"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Read", WasBlocked: false})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Bash", WasBlocked: true, RuleName: "r2"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyStream, ToolName: "Write", WasBlocked: true, RuleName: "r3"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyBuffer, ToolName: "Edit", WasBlocked: true, RuleName: "r4"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Read", WasBlocked: false})
 
-	m := GetMetrics()
-	blocked := m.Layer0Blocks.Load() + m.Layer1Blocks.Load()
+	m := eventlog.GetMetrics()
+	blocked := m.ProxyRequestBlocks.Load() + m.ProxyResponseBlocks.Load()
 
 	if blocked != 4 {
 		t.Errorf("total blocked = %d, want 4", blocked)
@@ -105,75 +107,75 @@ func TestBlockedTotal(t *testing.T) {
 	}
 
 	// Verify invariant: total = blocked + allowed
-	allowed := m.Layer1Allowed.Load()
+	allowed := m.ProxyResponseAllowed.Load()
 	if blocked+allowed != m.TotalToolCalls.Load() {
 		t.Errorf("invariant broken: blocked(%d) + allowed(%d) != total(%d)", blocked, allowed, m.TotalToolCalls.Load())
 	}
 }
 
 func TestGetStatsMap(t *testing.T) {
-	globalMetrics.Reset()
+	eventlog.GetMetrics().Reset()
 
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Bash", WasBlocked: true, RuleName: "r2"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Read", WasBlocked: false})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Bash", WasBlocked: true, RuleName: "r2"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Read", WasBlocked: false})
 
-	stats := GetMetrics().GetStats()
+	stats := eventlog.GetMetrics().GetStats()
 
 	if stats["total_tool_calls"] != 3 {
 		t.Errorf("total_tool_calls = %d, want 3", stats["total_tool_calls"])
 	}
-	if stats["layer0_blocks"] != 1 {
-		t.Errorf("layer0_blocks = %d, want 1", stats["layer0_blocks"])
+	if stats["proxy_request_blocks"] != 1 {
+		t.Errorf("layer0_blocks = %d, want 1", stats["proxy_request_blocks"])
 	}
-	if stats["layer1_blocks"] != 1 {
-		t.Errorf("layer1_blocks = %d, want 1", stats["layer1_blocks"])
+	if stats["proxy_response_blocks"] != 1 {
+		t.Errorf("layer1_blocks = %d, want 1", stats["proxy_response_blocks"])
 	}
-	if stats["layer1_allowed"] != 1 {
-		t.Errorf("layer1_allowed = %d, want 1", stats["layer1_allowed"])
+	if stats["proxy_response_allowed"] != 1 {
+		t.Errorf("layer1_allowed = %d, want 1", stats["proxy_response_allowed"])
 	}
 }
 
 func TestLayer0NonBlockedDroppedFromMetrics(t *testing.T) {
-	globalMetrics.Reset()
+	eventlog.GetMetrics().Reset()
 
-	// Non-blocked L0 events shouldn't happen in practice.
+	// Non-blocked proxy request events shouldn't happen in practice.
 	// They are silently dropped to preserve the invariant:
-	//   TotalToolCalls == Layer0Blocks + Layer1Blocks + Layer1Allowed
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Read", WasBlocked: false})
+	//   TotalToolCalls == ProxyRequestBlocks + ProxyResponseBlocks + ProxyResponseAllowed
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Read", WasBlocked: false})
 
-	m := GetMetrics()
-	if got := m.Layer0Blocks.Load(); got != 0 {
-		t.Errorf("Layer0Blocks = %d, want 0", got)
+	m := eventlog.GetMetrics()
+	if got := m.ProxyRequestBlocks.Load(); got != 0 {
+		t.Errorf("ProxyRequestBlocks = %d, want 0", got)
 	}
 	if got := m.TotalToolCalls.Load(); got != 0 {
-		t.Errorf("TotalToolCalls = %d, want 0 (non-blocked L0 dropped)", got)
+		t.Errorf("TotalToolCalls = %d, want 0 (non-blocked proxy request dropped)", got)
 	}
 }
 
 func TestInvariantTotalEqualsSubcounters(t *testing.T) {
-	globalMetrics.Reset()
+	eventlog.GetMetrics().Reset()
 
 	// Mix of all layer types
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Write", WasBlocked: true, RuleName: "r2"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Bash", WasBlocked: true, RuleName: "r3"})
-	RecordEvent(Event{Layer: LayerL1, ToolName: "Read", WasBlocked: false})
-	RecordEvent(Event{Layer: LayerL1Stream, ToolName: "Write", WasBlocked: true, RuleName: "r4"})
-	RecordEvent(Event{Layer: LayerL1Stream, ToolName: "Edit", WasBlocked: false})
-	RecordEvent(Event{Layer: LayerL1Buffer, ToolName: "Bash", WasBlocked: true, RuleName: "r5"})
-	// Non-blocked L0 should be silently dropped:
-	RecordEvent(Event{Layer: LayerL0, ToolName: "Read", WasBlocked: false})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Read", WasBlocked: true, RuleName: "r1"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Write", WasBlocked: true, RuleName: "r2"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Bash", WasBlocked: true, RuleName: "r3"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyResponse, ToolName: "Read", WasBlocked: false})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyStream, ToolName: "Write", WasBlocked: true, RuleName: "r4"})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyStream, ToolName: "Edit", WasBlocked: false})
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyBuffer, ToolName: "Bash", WasBlocked: true, RuleName: "r5"})
+	// Non-blocked proxy request should be silently dropped:
+	eventlog.Record(eventlog.Event{Layer: eventlog.LayerProxyRequest, ToolName: "Read", WasBlocked: false})
 
-	m := GetMetrics()
-	sum := m.Layer0Blocks.Load() + m.Layer1Blocks.Load() + m.Layer1Allowed.Load()
+	m := eventlog.GetMetrics()
+	sum := m.ProxyRequestBlocks.Load() + m.ProxyResponseBlocks.Load() + m.ProxyResponseAllowed.Load()
 
 	if m.TotalToolCalls.Load() != sum {
 		t.Errorf("invariant broken: TotalToolCalls(%d) != L0(%d)+L1B(%d)+L1A(%d) = %d",
-			m.TotalToolCalls.Load(), m.Layer0Blocks.Load(), m.Layer1Blocks.Load(),
-			m.Layer1Allowed.Load(), sum)
+			m.TotalToolCalls.Load(), m.ProxyRequestBlocks.Load(), m.ProxyResponseBlocks.Load(),
+			m.ProxyResponseAllowed.Load(), sum)
 	}
 	if m.TotalToolCalls.Load() != 7 {
-		t.Errorf("TotalToolCalls = %d, want 7 (1 non-blocked L0 dropped)", m.TotalToolCalls.Load())
+		t.Errorf("TotalToolCalls = %d, want 7 (1 non-blocked proxy request dropped)", m.TotalToolCalls.Load())
 	}
 }

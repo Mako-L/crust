@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/BakeLens/crust/internal/api"
+	"github.com/BakeLens/crust/internal/eventlog"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/telemetry"
 )
@@ -142,16 +143,16 @@ func (s *APIServer) handleLogs(c *gin.Context) {
 // handleStats handles GET /api/security/stats
 // Returns in-memory metrics for the current daemon session (not DB totals).
 func (s *APIServer) handleStats(c *gin.Context) {
-	m := GetMetrics()
-	blocked := m.Layer0Blocks.Load() + m.Layer1Blocks.Load()
+	m := eventlog.GetMetrics()
+	blocked := m.ProxyRequestBlocks.Load() + m.ProxyResponseBlocks.Load()
 
 	api.Success(c, gin.H{
-		"total_tool_calls":   m.TotalToolCalls.Load(),
-		"blocked_tool_calls": blocked,
-		"allowed_tool_calls": m.Layer1Allowed.Load(),
-		"layer0_blocks":      m.Layer0Blocks.Load(),
-		"layer1_blocks":      m.Layer1Blocks.Load(),
-		"layer1_allowed":     m.Layer1Allowed.Load(),
+		"total_tool_calls":       m.TotalToolCalls.Load(),
+		"blocked_tool_calls":     blocked,
+		"allowed_tool_calls":     m.ProxyResponseAllowed.Load(),
+		"proxy_request_blocks":   m.ProxyRequestBlocks.Load(),
+		"proxy_response_blocks":  m.ProxyResponseBlocks.Load(),
+		"proxy_response_allowed": m.ProxyResponseAllowed.Load(),
 	})
 }
 

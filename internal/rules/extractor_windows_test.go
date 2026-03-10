@@ -3,6 +3,7 @@
 package rules
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/BakeLens/crust/internal/rules/pwsh"
 )
 
 // =============================================================================
@@ -69,7 +72,7 @@ func concatBootstrapForLint(t *testing.T) string {
 // It is skipped when PSScriptAnalyzer is not installed or pwsh is absent.
 // Run with: go test -run TestPSScriptAnalyzer ./internal/rules/...
 func TestPSScriptAnalyzer(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh/powershell not found")
 	}
@@ -145,7 +148,7 @@ Write-Output $out
 //
 // Skipped when PSScriptAnalyzer is absent or the required rules are not available.
 func TestPSScriptAnalyzerCodeStyle(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh/powershell not found")
 	}
@@ -214,13 +217,13 @@ Write-Output $out
 // TestPSWorker_BasicExtraction verifies that the pwsh worker extracts paths
 // and command names from PowerShell commands that the bash parser handles poorly.
 func TestPSWorker_BasicExtraction(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh.exe / powershell.exe not found")
 	}
 
 	ext := NewExtractorWithEnv(map[string]string{"HOME": "C:\\Users\\user", "USERPROFILE": "C:\\Users\\user"})
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		t.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()
@@ -298,13 +301,13 @@ func TestPSWorker_BasicExtraction(t *testing.T) {
 // TestPSWorker_EvasionIntegrity verifies that commands unparseable by both
 // bash and PS are correctly flagged as evasive even with the pwsh worker active.
 func TestPSWorker_EvasionIntegrity(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh.exe / powershell.exe not found")
 	}
 
 	ext := NewExtractor()
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		t.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()
@@ -898,13 +901,13 @@ func TestPSWorker_PipelineInput(t *testing.T) {
 //   - Literal-string IEX is recursively analyzed (inner command paths extracted)
 //   - Variable-built IEX string remains a [GAP-PARTIAL] — inner paths not extracted
 func TestPSWorker_IEX_OpExecuteOnly(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh.exe / powershell.exe not found")
 	}
 
 	ext := NewExtractorWithEnv(nil)
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		t.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()
@@ -1441,7 +1444,7 @@ func TestPSWorker_StaticMethod_VarArg(t *testing.T) {
 //     restart the worker and return a valid response.
 //  3. Successful responses must have structurally valid commands (name/args).
 func FuzzPSWorker_NoCrash(f *testing.F) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		f.Skip("pwsh.exe / powershell.exe not found")
 	}
@@ -1523,7 +1526,7 @@ func FuzzPSWorker_NoCrash(f *testing.F) {
 //  2. All returned paths must be non-empty strings.
 //  3. Evasive commands must have a non-empty EvasiveReason.
 func FuzzExtractor_PSCommand(f *testing.F) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		f.Skip("pwsh.exe / powershell.exe not found")
 	}
@@ -1532,7 +1535,7 @@ func FuzzExtractor_PSCommand(f *testing.F) {
 		"HOME":        "C:\\Users\\user",
 		"USERPROFILE": "C:\\Users\\user",
 	})
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		f.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()
@@ -2049,7 +2052,7 @@ func TestExtract_CmdPercentVarExpansion(t *testing.T) {
 // Gap: ps_bootstrap_vars.ps1 only handles simple $var assignments; $env:VAR
 // is a scoped MemberExpressionAst that falls through to empty string.
 func TestPSWorker_EnvVarExpansion(t *testing.T) {
-	pwshPath, ok := FindPwsh()
+	pwshPath, ok := pwsh.FindPwsh()
 	if !ok {
 		t.Skip("pwsh.exe / powershell.exe not found")
 	}
@@ -2061,7 +2064,7 @@ func TestPSWorker_EnvVarExpansion(t *testing.T) {
 		"USERPROFILE": `C:\Users\user`,
 		"APPDATA":     `C:\Users\user\AppData\Roaming`,
 	})
-	if err := ext.EnablePSWorker(pwshPath); err != nil {
+	if err := ext.EnablePSWorker(context.Background(), pwshPath); err != nil {
 		t.Fatalf("EnablePSWorker: %v", err)
 	}
 	defer ext.Close()

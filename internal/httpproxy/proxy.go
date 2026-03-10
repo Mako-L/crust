@@ -21,6 +21,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/BakeLens/crust/internal/config"
+	"github.com/BakeLens/crust/internal/eventlog"
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/message"
 	"github.com/BakeLens/crust/internal/rules"
@@ -218,8 +219,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result := interceptor.GetEngine().Evaluate(tc)
 			if result.Matched && result.Action == rules.ActionBlock {
 				log.Warn("[Layer0] Request blocked: %s in history (rule: %s)", tc.Name, result.RuleName)
-				security.RecordEvent(security.Event{
-					Layer:      security.LayerL0,
+				eventlog.Record(eventlog.Event{
+					Layer:      eventlog.LayerProxyRequest,
 					TraceID:    traceID,
 					SessionID:  sessionID,
 					ToolName:   tc.Name,
@@ -361,7 +362,7 @@ func readAndDecompressBody(w http.ResponseWriter, r *http.Request) (
 	// Decompress request body for local parsing only (model extraction, security scanning).
 	// The original compressed body is forwarded to upstream untouched for full transparency.
 	parseBytes = bodyBytes
-	if len(bodyBytes) > 4 {
+	if len(bodyBytes) >= 4 {
 		contentEncoding := r.Header.Get("Content-Encoding")
 		if contentEncoding == "" {
 			// Auto-detect by magic bytes

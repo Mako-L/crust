@@ -37,16 +37,19 @@ type ProcessPlugin struct {
 	stdout          io.ReadCloser // kept to close on kill, unblocking scanner goroutine
 	scanner         *bufio.Scanner
 	encoder         *json.Encoder
-	restartFailures int // consecutive restart failures
+	restartFailures int             // consecutive restart failures
+	ctx             context.Context // lifecycle context; cancellation kills the subprocess
 }
 
 // NewProcessPlugin creates a plugin backed by an external process.
 // The process is not started until Init is called.
-func NewProcessPlugin(name, cmdPath string, args ...string) *ProcessPlugin {
+// The context controls the subprocess lifetime; canceling it kills the process.
+func NewProcessPlugin(ctx context.Context, name, cmdPath string, args ...string) *ProcessPlugin {
 	return &ProcessPlugin{
 		name:    name,
 		cmdPath: cmdPath,
 		args:    args,
+		ctx:     ctx,
 	}
 }
 
@@ -162,8 +165,8 @@ func (p *ProcessPlugin) Close() error {
 }
 
 // startLocked launches the external process. Caller must hold p.mu.
-func (p *ProcessPlugin) startLocked() error {
-	proc := exec.CommandContext(context.Background(), p.cmdPath, p.args...) //nolint:gosec // plugin cmdPath is user-configured
+func (p *ProcessPlugin) startLocked() (err error) {
+	proc := exec.CommandContext(p.ctx, p.cmdPath, p.args...) //nolint:gosec // plugin cmdPath is user-configured
 	stdin, err := proc.StdinPipe()
 	if err != nil {
 		return err
@@ -173,10 +176,15 @@ func (p *ProcessPlugin) startLocked() error {
 		stdin.Close()
 		return err
 	}
+	defer func() {
+		if err != nil {
+			stdin.Close()
+			stdout.Close()
+		}
+	}()
 	proc.Stderr = os.Stderr // let plugin write diagnostics to stderr
 
-	if err := proc.Start(); err != nil {
-		stdin.Close()
+	if err = proc.Start(); err != nil {
 		return err
 	}
 

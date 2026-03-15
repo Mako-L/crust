@@ -182,6 +182,11 @@ let session = URLSession(configuration: .crustProtected)
 // Best for custom integrations or manual checks.
 let result = await engine.evaluateAsync(toolName: "read_contacts", arguments: [:])
 print(result.matched)  // true — blocked by protect-mobile-pii
+
+// ── Content scanning (DLP for text responses & user input) ──
+let scan = engine.scanContent(aiTextResponse)     // secrets in AI output
+let outbound = engine.scanOutbound(userMessage)    // secrets in user input
+let urlCheck = engine.validateURL("tel:+1234567890") // blocked URL schemes
 ```
 
 **Mobile-specific protections** (7 locked rules + shared rules):
@@ -197,6 +202,8 @@ print(result.matched)  // true — blocked by protect-mobile-pii
 | Purchases | in-app purchases, financial transactions | `protect-mobile-purchases` |
 | Persistence | background task scheduling | `protect-persistence` |
 | Notifications | push/local notification sending | (user-configurable) |
+| Content DLP | secrets/PII in AI text responses, user input, clipboard | DLP engine (46 patterns) |
+| URL Validation | dangerous URL schemes (`tel:`, `sms:`, etc.) | `protect-mobile-url-schemes` |
 
 **Installation:**
 
@@ -266,7 +273,7 @@ crust add-rule my-rules.yaml    # Rules active immediately (hot reload)
 
 ### Plugins
 
-Plugins are **late-stage protection layers** that run after the built-in 13-step evaluation pipeline. When the engine allows a tool call, it passes through registered plugins before returning the final verdict. Plugins can implement sandboxing, rate limiting, audit logging, or custom policy enforcement.
+Plugins are **late-stage protection layers** that run after the built-in 14-step evaluation pipeline. When the engine allows a tool call, it passes through registered plugins before returning the final verdict. Plugins can implement sandboxing, rate limiting, audit logging, or custom policy enforcement.
 
 Plugins communicate over a **JSON wire protocol** (newline-delimited JSON over stdin/stdout) — write them in **any language**: Python, Go, Rust, Node.js, etc.
 
@@ -301,7 +308,7 @@ A security tool must protect itself first. Crust is built to resist tampering �
 | **Logs are encrypted** | Activity logs are stored in an encrypted database; the key never appears in command history |
 | **Oversized requests are rejected** | Abnormally large inputs are dropped before processing to prevent abuse |
 | **Connections are encrypted** | All traffic to LLM providers uses modern encryption (TLS 1.2+) |
-| **Every code change is scanned** | 14 automated security checks run on every commit — vulnerability scanning, secret detection, race condition testing |
+| **Every code change is scanned** | 16 automated security checks run on every commit — vulnerability scanning, secret detection, race condition testing |
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

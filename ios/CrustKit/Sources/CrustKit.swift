@@ -4,7 +4,10 @@
 // adding proper error handling, Codable types, and actor isolation.
 
 import Foundation
-import Libcrust  // gomobile-generated framework
+import Libcrust // gomobile-generated framework
+#if canImport(UIKit) && !os(macOS)
+    import UIKit
+#endif
 
 // MARK: - Public types
 
@@ -68,12 +71,35 @@ public enum BlockMode: String, Sendable {
     case replace
 }
 
+/// Result of scanning content for secrets/PII.
+public struct ContentScanResult: Codable, Sendable {
+    public let matched: Bool
+    public let patternName: String?
+    public let message: String?
+    public let severity: String?
+    public let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case matched
+        case patternName = "pattern_name"
+        case message, severity, error
+    }
+}
+
+/// Result of validating a URL against scheme rules.
+public struct URLValidationResult: Codable, Sendable {
+    public let scheme: String
+    public let blocked: Bool
+    public let rule: String?
+    public let message: String?
+    public let error: String?
+}
+
 // MARK: - CrustEngine
 
 /// Thread-safe wrapper around the Crust rule engine.
 /// The underlying Go library handles its own synchronization.
 public final class CrustEngine: Sendable {
-
     public init() {}
 
     /// Initialize with builtin rules and optional user rules directory.
@@ -99,12 +125,12 @@ public final class CrustEngine: Sendable {
 
     /// Evaluate a tool call against loaded rules.
     public func evaluate(toolName: String, arguments: [String: Any]) -> EvaluationResult {
-        let argsJSON: String
-        if let data = try? JSONSerialization.data(withJSONObject: arguments),
-           let json = String(data: data, encoding: .utf8) {
-            argsJSON = json
+        let argsJSON: String = if let data = try? JSONSerialization.data(withJSONObject: arguments),
+                                  let json = String(data: data, encoding: .utf8)
+        {
+            json
         } else {
-            argsJSON = "{}"
+            "{}"
         }
 
         let resultJSON = LibcrustEvaluate(toolName, argsJSON)
@@ -152,6 +178,56 @@ public final class CrustEngine: Sendable {
     /// Release engine resources.
     public func shutdown() {
         LibcrustShutdown()
+    }
+
+    // MARK: - Content Scanning
+
+    /// Scan any text for secrets, PII, or sensitive data using the DLP engine.
+    public func scanContent(_ content: String) -> ContentScanResult {
+        let resultJSON = LibcrustScanContent(content)
+        return decode(resultJSON) ?? ContentScanResult(
+            matched: false, patternName: nil, message: nil,
+            severity: nil, error: "decode failed"
+        )
+    }
+
+    /// Scan outbound user→AI message for secrets before sending.
+    /// Alias for `scanContent` — same DLP engine, clearer intent.
+    public func scanOutbound(_ content: String) -> ContentScanResult {
+        scanContent(content)
+    }
+
+    /// Validate a URL against mobile URL scheme rules.
+    /// Returns whether the URL scheme is blocked (e.g. tel:, sms:).
+    public func validateURL(_ rawURL: String) -> URLValidationResult {
+        let resultJSON = LibcrustValidateURL(rawURL)
+        return decode(resultJSON) ?? URLValidationResult(
+            scheme: "", blocked: false, rule: nil,
+            message: nil, error: "decode failed"
+        )
+    }
+
+    /// Scan clipboard contents for secrets.
+    /// Uses UIPasteboard on iOS; returns not-matched on non-iOS platforms.
+    ///
+    /// - Important: Must be called from the main thread (UIPasteboard requirement).
+    ///   Use ``scanClipboardAsync()`` from background contexts.
+    @MainActor
+    public func scanClipboard() -> ContentScanResult {
+        #if canImport(UIKit) && !os(macOS)
+            guard let text = UIPasteboard.general.string, !text.isEmpty else {
+                return ContentScanResult(
+                    matched: false, patternName: nil, message: nil,
+                    severity: nil, error: nil
+                )
+            }
+            return scanContent(text)
+        #else
+            return ContentScanResult(
+                matched: false, patternName: nil, message: nil,
+                severity: nil, error: "clipboard scanning requires UIKit"
+            )
+        #endif
     }
 
     // MARK: - Local Proxy
@@ -208,8 +284,8 @@ public final class CrustEngine: Sendable {
     }
 
     /// Whether streaming interception is supported.
-    /// Currently returns false — streaming requests are passed through
-    /// without tool call filtering. Use non-streaming mode for full security.
+    /// Returns true — streaming requests are transparently converted to
+    /// non-streaming for full security evaluation by the proxy.
     public var streamInterceptionSupported: Bool {
         LibcrustStreamInterceptionSupported()
     }
@@ -254,6 +330,50 @@ public final class CrustEngine: Sendable {
         }.value
     }
 
+    /// Scan content for secrets off the main thread.
+    public func scanContentAsync(_ content: String) async -> ContentScanResult {
+        await Task.detached { [self] in
+            scanContent(content)
+        }.value
+    }
+
+    /// Scan outbound user→AI message off the main thread.
+    public func scanOutboundAsync(_ content: String) async -> ContentScanResult {
+        await Task.detached { [self] in
+            scanOutbound(content)
+        }.value
+    }
+
+    /// Validate a URL against scheme rules off the main thread.
+    public func validateURLAsync(_ rawURL: String) async -> URLValidationResult {
+        await Task.detached { [self] in
+            validateURL(rawURL)
+        }.value
+    }
+
+    /// Scan clipboard contents asynchronously.
+    /// Reads the clipboard on the main thread, then scans on a background thread.
+    public func scanClipboardAsync() async -> ContentScanResult {
+        #if canImport(UIKit) && !os(macOS)
+            // UIPasteboard must be accessed on the main thread.
+            let text: String? = await MainActor.run {
+                UIPasteboard.general.string
+            }
+            guard let text, !text.isEmpty else {
+                return ContentScanResult(
+                    matched: false, patternName: nil, message: nil,
+                    severity: nil, error: nil
+                )
+            }
+            return await scanContentAsync(text)
+        #else
+            return ContentScanResult(
+                matched: false, patternName: nil, message: nil,
+                severity: nil, error: "clipboard scanning requires UIKit"
+            )
+        #endif
+    }
+
     // MARK: - Private
 
     private func decode<T: Decodable>(_ json: String) -> T? {
@@ -295,32 +415,54 @@ public final class CrustEngine: Sendable {
 ///
 /// Limitations:
 /// - Only works for URLSession-based networking (not NWConnection, raw sockets, etc.)
-/// - Streaming (SSE) responses are passed through without interception
+/// - Streaming (SSE) responses are passed through without interception by URLProtocol;
+///   use the local proxy (``startProxy``) for full streaming protection
 /// - The protocol must be registered before creating the URLSession
 public final class CrustURLProtocol: URLProtocol {
+    // MARK: - Thread-safe static configuration
+
+    private static let lock = NSLock()
+    private static var _engine: CrustEngine?
+    private static var _interceptedHosts: Set<String> = [
+        "api.anthropic.com",
+        "api.openai.com",
+    ]
+    private static var _blockMode: BlockMode = .remove
 
     /// The Crust engine used for rule evaluation. Must be set before use.
-    public static var engine: CrustEngine?
+    public static var engine: CrustEngine? {
+        get { lock.withLock { _engine } }
+        set { lock.withLock { _engine = newValue } }
+    }
 
     /// Hosts to intercept (e.g. ["api.anthropic.com", "api.openai.com"]).
     /// Requests to other hosts pass through unmodified.
-    public static var interceptedHosts: Set<String> = [
-        "api.anthropic.com",
-        "api.openai.com",
-        "generativelanguage.googleapis.com",
-    ]
+    public static var interceptedHosts: Set<String> {
+        get { lock.withLock { _interceptedHosts } }
+        set { lock.withLock { _interceptedHosts = newValue } }
+    }
 
     /// Block mode for intercepted responses.
-    public static var blockMode: BlockMode = .remove
+    public static var blockMode: BlockMode {
+        get { lock.withLock { _blockMode } }
+        set { lock.withLock { _blockMode = newValue } }
+    }
 
     /// Key used to mark requests we've already handled (prevent infinite recursion).
     private static let handledKey = "com.bakelens.crust.handled"
+
+    /// Shared session for upstream requests (avoids per-request session leak).
+    private static let upstreamSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [] // no custom protocols — prevents recursion
+        return URLSession(configuration: config)
+    }()
 
     private var dataTask: URLSessionDataTask?
 
     // MARK: - URLProtocol overrides
 
-    public override class func canInit(with request: URLRequest) -> Bool {
+    override public class func canInit(with request: URLRequest) -> Bool {
         // Don't intercept if no engine configured.
         guard engine != nil else { return false }
 
@@ -334,11 +476,11 @@ public final class CrustURLProtocol: URLProtocol {
         return interceptedHosts.contains(host)
     }
 
-    public override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    override public class func canonicalRequest(for request: URLRequest) -> URLRequest {
         request
     }
 
-    public override func startLoading() {
+    override public func startLoading() {
         guard let engine = CrustURLProtocol.engine else {
             let error = NSError(
                 domain: "CrustKit",
@@ -359,33 +501,29 @@ public final class CrustURLProtocol: URLProtocol {
         // Check if this is a streaming request.
         let isStreaming = Self.isStreamingRequest(request)
 
-        // Create a session that won't trigger this protocol again.
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [] // no custom protocols — prevents recursion
-        let session = URLSession(configuration: config)
-
-        dataTask = session.dataTask(with: mutableRequest as URLRequest) { [weak self] data, response, error in
+        dataTask = Self.upstreamSession.dataTask(with: mutableRequest as URLRequest) { [weak self] data, response, error in
             guard let self else { return }
 
             if let error {
-                self.client?.urlProtocol(self, didFailWithError: error)
+                client?.urlProtocol(self, didFailWithError: error)
                 return
             }
 
             guard let httpResponse = response as? HTTPURLResponse,
-                  let data else {
+                  let data
+            else {
                 let error = NSError(
                     domain: "CrustKit",
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Invalid response from upstream"]
                 )
-                self.client?.urlProtocol(self, didFailWithError: error)
+                client?.urlProtocol(self, didFailWithError: error)
                 return
             }
 
             // Intercept non-streaming successful responses.
             var responseData = data
-            if !isStreaming && httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 {
+            if !isStreaming, httpResponse.statusCode >= 200, httpResponse.statusCode < 300 {
                 if let body = String(data: data, encoding: .utf8) {
                     let result = engine.interceptResponse(
                         body: body,
@@ -404,28 +542,29 @@ public final class CrustURLProtocol: URLProtocol {
                 newContentLength: responseData.count
             )
             if let newResponse = HTTPURLResponse(
-                url: httpResponse.url ?? self.request.url!,
+                url: httpResponse.url ?? request.url!,
                 statusCode: httpResponse.statusCode,
                 httpVersion: "HTTP/1.1",
                 headerFields: headers
             ) {
-                self.client?.urlProtocol(self, didReceive: newResponse, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didReceive: newResponse, cacheStoragePolicy: .notAllowed)
             }
 
-            self.client?.urlProtocol(self, didLoad: responseData)
-            self.client?.urlProtocolDidFinishLoading(self)
+            client?.urlProtocol(self, didLoad: responseData)
+            client?.urlProtocolDidFinishLoading(self)
         }
 
         dataTask?.resume()
     }
 
-    public override func stopLoading() {
+    override public func stopLoading() {
         dataTask?.cancel()
         dataTask = nil
     }
 
     // MARK: - Helpers
 
+    /// NOTE: Keep in sync with detectAPITypeFromPath() in pkg/libcrust/proxy.go.
     private static func detectAPIType(from url: URL?) -> APIType {
         guard let path = url?.path else { return .openai }
         if path.contains("/v1/messages") || path.contains("/anthropic") {
@@ -439,7 +578,8 @@ public final class CrustURLProtocol: URLProtocol {
 
     private static func isStreamingRequest(_ request: URLRequest) -> Bool {
         guard let body = request.httpBody,
-              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else {
             return false
         }
         return json["stream"] as? Bool == true
@@ -465,7 +605,6 @@ public final class CrustURLProtocol: URLProtocol {
 // MARK: - URLSessionConfiguration convenience
 
 public extension URLSessionConfiguration {
-
     /// Register CrustURLProtocol on this configuration.
     /// Call this before creating a URLSession with this configuration.
     func registerCrustProtocol() {

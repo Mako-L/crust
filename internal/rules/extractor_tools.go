@@ -156,6 +156,10 @@ func (e *Extractor) augmentFromArgShape(info *ExtractedInfo) {
 	// embedded IP alongside the original hostname so IP-based host rules match.
 	info.Hosts = expandRebindingHosts(info.Hosts)
 
+	// SECURITY: Resolve hostnames via DNS and add loopback IPs to the host list.
+	// Catches custom domains pointing to 127.0.0.1 that bypass regex/rebinding checks.
+	info.Hosts = ResolveAndExpandHosts(info.Hosts)
+
 	// Deduplicate
 	info.Paths = deduplicateStrings(info.Paths)
 	info.Hosts = deduplicateStrings(info.Hosts)
@@ -454,7 +458,7 @@ func mobileSharePath(args map[string]any) string {
 // mobilePurchasePath builds a virtual purchase path from args.
 // e.g., {"product_id": "premium_monthly"} → "mobile://purchase/premium_monthly"
 func mobilePurchasePath(args map[string]any) string {
-	for _, field := range []string{"product_id", "productid", "sku", "item", "item_id", "name", "identifier"} {
+	for _, field := range []string{"productid", "sku", "item", "itemid", "name", "identifier"} {
 		if val, ok := args[field]; ok {
 			if strs := fieldStrings(val); len(strs) > 0 {
 				return MobileVirtualPathPrefix + "purchase/" + sanitizeVirtualPathSegment(strs[0])
@@ -464,9 +468,15 @@ func mobilePurchasePath(args map[string]any) string {
 	return MobileVirtualPathPrefix + "purchase/_unknown"
 }
 
-// extractURLScheme returns the scheme portion of a URL string.
+// ExtractURLScheme returns the scheme portion of a URL string.
 // e.g., "tel:+1234567890" → "tel", "https://example.com" → "https"
 // Per RFC 3986, schemes must start with a letter.
+// Exported for use by libcrust's ValidateURL.
+func ExtractURLScheme(rawURL string) string {
+	return extractURLScheme(rawURL)
+}
+
+// extractURLScheme is the internal implementation.
 func extractURLScheme(rawURL string) string {
 	if i := strings.Index(rawURL, ":"); i > 0 && i < 32 {
 		scheme := strings.ToLower(rawURL[:i])

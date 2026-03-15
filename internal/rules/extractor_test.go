@@ -3,13 +3,16 @@ package rules
 import (
 	"context"
 	"encoding/json"
+	"net/netip"
 	"os"
 	"reflect"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BakeLens/crust/internal/rules/pwsh"
 )
@@ -741,6 +744,170 @@ func TestExpandRebindingHosts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolvesToLoopback(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+		desc string
+	}{
+		// IPv4 loopback range
+		{"127.0.0.1", true, "standard loopback"},
+		{"127.255.255.255", true, "end of 127.0.0.0/8"},
+		{"127.0.0.2", true, "alternate loopback"},
+
+		// IPv6 loopback
+		{"::1", true, "IPv6 loopback"},
+		{"::ffff:127.0.0.1", true, "IPv6-mapped IPv4 loopback"},
+
+		// Non-loopback IPs
+		{"10.0.0.1", false, "private IP"},
+		{"8.8.8.8", false, "public IP"},
+		{"192.168.1.1", false, "private IP"},
+		{"0.0.0.0", false, "unspecified address"},
+
+		// Hostname resolution
+		{"localhost", true, "resolves to 127.0.0.1 via /etc/hosts"},
+
+		// Non-existent / invalid
+		{"this-domain-definitely-does-not-exist.invalid", false, "NXDOMAIN"},
+		{"", false, "empty string"},
+		{"not a host", false, "contains spaces"},
+		{"../etc/passwd", false, "path traversal"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			if got := ResolvesToLoopback(tt.host); got != tt.want {
+				t.Errorf("ResolvesToLoopback(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDNSCacheBounded(t *testing.T) {
+	// Fill cache beyond maxSize and verify it doesn't grow unbounded
+	cache := &dnsLRU{entries: make(map[string]dnsCacheEntry), maxSize: 10}
+	for i := range 20 {
+		host := "host" + strconv.Itoa(i) + ".example.com"
+		cache.put(host, nil)
+	}
+	if len(cache.entries) > cache.maxSize {
+		t.Errorf("cache size %d exceeds maxSize %d", len(cache.entries), cache.maxSize)
+	}
+}
+
+func TestDNSCacheTTLExpiry(t *testing.T) {
+	cache := &dnsLRU{entries: make(map[string]dnsCacheEntry), maxSize: 10}
+	addr := netip.MustParseAddr("127.0.0.1")
+	cache.entries["test.example.com"] = dnsCacheEntry{
+		ips:     []netip.Addr{addr},
+		expires: time.Now().Add(-1 * time.Second), // already expired
+	}
+	if ips, ok := cache.get("test.example.com"); ok {
+		t.Errorf("expired entry should not be returned, got %v", ips)
+	}
+}
+
+func TestDNSCacheHit(t *testing.T) {
+	cache := &dnsLRU{entries: make(map[string]dnsCacheEntry), maxSize: 10}
+	addr := netip.MustParseAddr("93.184.216.34")
+	cache.put("example.com", []netip.Addr{addr})
+
+	ips, ok := cache.get("example.com")
+	if !ok {
+		t.Fatal("cache hit expected")
+	}
+	if len(ips) != 1 || ips[0] != addr {
+		t.Errorf("got %v, want [%v]", ips, addr)
+	}
+}
+
+func TestDNSCacheNegative(t *testing.T) {
+	// Negative cache: lookup failure stores nil, prevents repeated DNS queries
+	cache := &dnsLRU{entries: make(map[string]dnsCacheEntry), maxSize: 10}
+	cache.put("nxdomain.invalid", nil)
+
+	ips, ok := cache.get("nxdomain.invalid")
+	if !ok {
+		t.Fatal("negative cache entry should be returned")
+	}
+	if ips != nil {
+		t.Errorf("negative cache should return nil IPs, got %v", ips)
+	}
+}
+
+func TestIsResolvableHostname(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"localhost", true},
+		{"example.com", true},
+		{"my-host", true},
+		{"api.example.com", true},
+		{"", false},
+		{"123", false},       // all digits, no letters
+		{"127.0.0.1", false}, // looks like IP, no letters
+		{"hello world", false},
+		{"path/traversal", false},
+		{"..", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := isResolvableHostname(tt.input); got != tt.want {
+				t.Errorf("isResolvableHostname(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHostResolvesToLoopbackWithCrust(t *testing.T) {
+	tests := []struct {
+		name    string
+		hosts   []string
+		rawJSON string
+		want    bool
+	}{
+		{"localhost+crust", []string{"localhost"}, `{"url":"http://localhost:9090/crust/api"}`, true},
+		{"127.0.0.1+crust", []string{"127.0.0.1"}, `{"url":"http://127.0.0.1:9090/crust/api"}`, true},
+		{"::1+crust", []string{"::1"}, `{"url":"http://[::1]:9090/crust/api"}`, true},
+		{"case-insensitive", []string{"localhost"}, `{"url":"http://localhost:9090/CRUST/API"}`, true},
+		{"localhost-no-crust", []string{"localhost"}, `{"url":"http://localhost:9090/other"}`, false},
+		{"non-loopback+crust", []string{"example.com"}, `{"url":"http://example.com/crust"}`, false},
+		{"nil-hosts", nil, `{"url":"http://localhost/crust"}`, false},
+		{"empty-hosts", []string{}, `{"url":"http://localhost/crust"}`, false},
+		{"empty-json", []string{"localhost"}, "", false},
+		{"multiple-hosts-one-loopback", []string{"example.com", "localhost"}, `{"crust":true}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostResolvesToLoopbackWithCrust(tt.hosts, tt.rawJSON); got != tt.want {
+				t.Errorf("hostResolvesToLoopbackWithCrust(%v, %q) = %v, want %v", tt.hosts, tt.rawJSON, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveAndExpandHosts(t *testing.T) {
+	// localhost should get 127.0.0.1 added
+	hosts := ResolveAndExpandHosts([]string{"localhost"})
+	hasLoopback := false
+	for _, h := range hosts {
+		if h == "127.0.0.1" || h == "::1" {
+			hasLoopback = true
+			break
+		}
+	}
+	if !hasLoopback {
+		t.Errorf("ResolveAndExpandHosts([localhost]) should include loopback IP, got %v", hosts)
+	}
+
+	// IP literal should pass through unchanged (no expansion)
+	hosts = ResolveAndExpandHosts([]string{"93.184.216.34"})
+	if len(hosts) != 1 || hosts[0] != "93.184.216.34" {
+		t.Errorf("IP literal should not be expanded, got %v", hosts)
 	}
 }
 
@@ -4994,6 +5161,13 @@ func TestExtract_MobileTools(t *testing.T) {
 			args:      map[string]any{"product_id": "premium_monthly"},
 			wantOp:    OpExecute,
 			wantPaths: []string{"mobile://purchase/premium_monthly"},
+		},
+		{
+			name:      "purchase_item with item_id (normalized to itemid)",
+			toolName:  "purchase_item",
+			args:      map[string]any{"item_id": "gold_pack"},
+			wantOp:    OpExecute,
+			wantPaths: []string{"mobile://purchase/gold_pack"},
 		},
 		{
 			name:      "in_app_purchase without product_id",

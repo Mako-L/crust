@@ -33,6 +33,20 @@ var (
 	interceptor *security.Interceptor
 )
 
+const errNotInitialized = "engine not initialized"
+
+func getEngine() *rules.Engine {
+	mu.RLock()
+	defer mu.RUnlock()
+	return engine
+}
+
+func getInterceptor() *security.Interceptor {
+	mu.RLock()
+	defer mu.RUnlock()
+	return interceptor
+}
+
 // Init initializes the rule engine with builtin rules.
 // Call this once at app startup. Optional userRulesDir can be empty.
 // Safe to call multiple times — the previous engine is closed first.
@@ -80,7 +94,7 @@ func AddRulesYAML(yamlRules string) error {
 	defer mu.Unlock()
 
 	if engine == nil {
-		return fmt.Errorf("engine not initialized; call Init first")
+		return fmt.Errorf("%s; call Init first", errNotInitialized)
 	}
 	return engine.AddRulesFromYAML([]byte(yamlRules))
 }
@@ -92,12 +106,9 @@ func AddRulesYAML(yamlRules string) error {
 //
 // or {"matched":false} if the tool call is allowed.
 func Evaluate(toolName string, argsJSON string) string {
-	mu.RLock()
-	e := engine
-	mu.RUnlock()
-
+	e := getEngine()
 	if e == nil {
-		return `{"matched":false,"error":"engine not initialized"}`
+		return `{"matched":false,"error":"` + errNotInitialized + `"}`
 	}
 
 	result := e.Evaluate(rules.ToolCall{
@@ -119,10 +130,7 @@ func Evaluate(toolName string, argsJSON string) string {
 //
 //	{"modified_response":"...","blocked":[],"allowed":[]}
 func InterceptResponse(responseBody string, apiType string, blockMode string) string {
-	mu.RLock()
-	i := interceptor
-	mu.RUnlock()
-
+	i := getInterceptor()
 	if i == nil {
 		return responseBody
 	}
@@ -176,9 +184,7 @@ func InterceptResponse(responseBody string, apiType string, blockMode string) st
 
 // RuleCount returns the number of loaded rules.
 func RuleCount() int {
-	mu.RLock()
-	e := engine
-	mu.RUnlock()
+	e := getEngine()
 	if e == nil {
 		return 0
 	}
@@ -188,11 +194,9 @@ func RuleCount() int {
 // ValidateYAML checks whether a YAML rule string is valid.
 // Returns empty string on success, or an error message.
 func ValidateYAML(yamlRules string) string {
-	mu.RLock()
-	e := engine
-	mu.RUnlock()
+	e := getEngine()
 	if e == nil {
-		return "engine not initialized"
+		return errNotInitialized
 	}
 	_, err := e.ValidateYAMLFull([]byte(yamlRules))
 	if err != nil {
@@ -204,6 +208,67 @@ func ValidateYAML(yamlRules string) string {
 // GetVersion returns the library version string.
 func GetVersion() string {
 	return Version
+}
+
+// ScanContent scans arbitrary text for secrets/PII using the DLP engine.
+// Returns a JSON string with the scan result:
+//
+//	{"matched":true,"pattern_name":"builtin:dlp-github-token","message":"...","severity":"critical"}
+//
+// or {"matched":false} if the content is clean.
+func ScanContent(content string) string {
+	e := getEngine()
+	if e == nil {
+		return `{"matched":false,"error":"` + errNotInitialized + `"}`
+	}
+
+	result := e.ScanDLP(content)
+	if result == nil {
+		return `{"matched":false}`
+	}
+
+	out, err := json.Marshal(contentScanResult{
+		Matched:     true,
+		PatternName: result.RuleName,
+		Message:     result.Message,
+		Severity:    string(result.Severity),
+	})
+	if err != nil {
+		return `{"matched":false,"error":"marshal failed"}`
+	}
+	return string(out)
+}
+
+// ValidateURL checks a URL against the mobile URL scheme rules.
+// Returns a JSON string with the validation result:
+//
+//	{"scheme":"tel","blocked":true,"rule":"protect-mobile-url-schemes","message":"..."}
+//
+// or {"scheme":"https","blocked":false} if the URL is allowed.
+func ValidateURL(rawURL string) string {
+	e := getEngine()
+	if e == nil {
+		return `{"scheme":"","blocked":false,"error":"` + errNotInitialized + `"}`
+	}
+
+	scheme := rules.ExtractURLScheme(rawURL)
+
+	// Evaluate using the open_url tool path to hit URL scheme rules.
+	result := e.Evaluate(rules.ToolCall{
+		Name:      "open_url",
+		Arguments: json.RawMessage(`{"url":` + jsonString(rawURL) + `}`),
+	})
+
+	out, err := json.Marshal(urlValidationResult{
+		Scheme:  scheme,
+		Blocked: result.Matched && result.Action == rules.ActionBlock,
+		Rule:    result.RuleName,
+		Message: result.Message,
+	})
+	if err != nil {
+		return `{"scheme":"","blocked":false,"error":"marshal failed"}`
+	}
+	return string(out)
 }
 
 // Shutdown releases resources. Safe to call multiple times.
@@ -234,6 +299,28 @@ type blockedCall struct {
 
 type allowedCall struct {
 	ToolName string `json:"tool_name"`
+}
+
+type contentScanResult struct {
+	Matched     bool   `json:"matched"`
+	PatternName string `json:"pattern_name,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+type urlValidationResult struct {
+	Scheme  string `json:"scheme"`
+	Blocked bool   `json:"blocked"`
+	Rule    string `json:"rule,omitempty"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// jsonString returns a JSON-encoded string value (with quotes and escaping).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func parseAPIType(s string) types.APIType {

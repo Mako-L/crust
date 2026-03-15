@@ -91,7 +91,9 @@ func (e *Extractor) extractBashCommand(info *ExtractedInfo) {
 			// Unparseable as bash, and either no pwsh worker or pwsh also
 			// rejected it (parse errors): treat as evasive.
 			info.Evasive = true
-			info.EvasiveReason = "unparseable shell command: " + err.Error()
+			if info.EvasiveReason == "" {
+				info.EvasiveReason = "unparseable shell command: " + err.Error()
+			}
 			printed = append(printed, strings.TrimSpace(cmd))
 			continue
 		}
@@ -1494,12 +1496,7 @@ func nodeHasUnsafe(root syntax.Node) bool {
 				return false
 			}
 		case *syntax.ParamExp:
-			// ${var@op} parameter transformations (e.g., @A, @E, @Q) are not
-			// fully supported by the interpreter and panic in pipe goroutines.
-			if n.Exp != nil && n.Exp.Op == syntax.OtherParamOps {
-				found = true
-				return false
-			}
+			_ = n // ${var@op} panic fixed in mvdan.cc/sh post-v3.13.0
 		case *syntax.Lit:
 			// U+FFFD in literals crashes regexp.MustCompile during glob
 			// expansion inside interpreter-spawned goroutines (unrecoverable).
@@ -1551,9 +1548,9 @@ func nodeHasUnsafe(root syntax.Node) bool {
 			case syntax.RdrOut, syntax.AppOut, syntax.RdrIn, syntax.WordHdoc:
 				// Handled by the interpreter
 			case syntax.Hdoc, syntax.DashHdoc:
-				// Heredocs in pipe goroutines panic with "unhandled redirect
-				// op: <<" because the interpreter's redir handler in goroutine
-				// context doesn't support them. Skip interpreter for safety.
+				// Heredocs in pipe goroutines still panic with "unhandled
+				// redirect op: <<" (e.g., "<<0|''\n0"). Only the non-pipe
+				// case was fixed upstream. Guard must remain.
 				found = true
 				return false
 			case syntax.RdrInOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll,
@@ -1573,8 +1570,8 @@ func nodeHasUnsafe(root syntax.Node) bool {
 }
 
 // safeShellParse wraps syntax.Parser.Parse with a recover guard.
-// The upstream parser (mvdan.cc/sh/v3) can panic on edge-case inputs
-// (e.g., "export A0=$0(" triggers slice bounds panic in declClause).
+// Defense-in-depth against potential parser panics on untrusted input.
+// The "export A0=$0(" declClause panic was fixed upstream post-v3.13.0.
 func safeShellParse(parser *syntax.Parser, cmd string) (file *syntax.File, err error) {
 	defer func() {
 		if r := recover(); r != nil {

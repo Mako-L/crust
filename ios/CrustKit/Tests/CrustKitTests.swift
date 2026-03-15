@@ -1,25 +1,10 @@
-import XCTest
 @testable import CrustKit
+import XCTest
 
-final class CrustKitTests: XCTestCase {
-
-    var engine: CrustEngine!
-
-    override func setUp() {
-        super.setUp()
-        engine = CrustEngine()
-    }
-
-    override func tearDown() {
-        engine.shutdown()
-        engine = nil
-        super.tearDown()
-    }
-
+final class CrustKitTests: CrustEngineTestCase {
     // MARK: - Initialization
 
-    func testInitWithBuiltinRules() throws {
-        try engine.initialize()
+    func testInitWithBuiltinRules() {
         XCTAssertGreaterThan(engine.ruleCount, 0, "should load builtin rules")
     }
 
@@ -36,7 +21,6 @@ final class CrustKitTests: XCTestCase {
     }
 
     func testAddRulesYAML() throws {
-        try engine.initialize()
         let before = engine.ruleCount
 
         let yaml = """
@@ -52,9 +36,7 @@ final class CrustKitTests: XCTestCase {
 
     // MARK: - Evaluation
 
-    func testAllowedToolCall() throws {
-        try engine.initialize()
-
+    func testAllowedToolCall() {
         let result = engine.evaluate(
             toolName: "read_file",
             arguments: ["path": "/tmp/test.txt"]
@@ -62,9 +44,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertFalse(result.matched, "reading /tmp/test.txt should be allowed")
     }
 
-    func testBlockedToolCall() throws {
-        try engine.initialize()
-
+    func testBlockedToolCall() {
         let result = engine.evaluate(
             toolName: "write_file",
             arguments: ["file_path": "/etc/crontab", "content": "* * * * * evil"]
@@ -74,9 +54,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertNotNil(result.message)
     }
 
-    func testEvaluateWithJSONString() throws {
-        try engine.initialize()
-
+    func testEvaluateWithJSONString() {
         let result = engine.evaluate(
             toolName: "read_file",
             argumentsJSON: #"{"path":"/tmp/safe.txt"}"#
@@ -87,34 +65,28 @@ final class CrustKitTests: XCTestCase {
     // MARK: - Response interception
 
     func testInterceptResponseAllowed() throws {
-        try engine.initialize()
-
         let body = """
         {"content":[{"type":"tool_use","id":"t1","name":"read_file","input":{"path":"/tmp/test.txt"}}]}
         """
         let result = engine.interceptResponse(body: body)
         XCTAssertNotNil(result)
-        XCTAssertTrue(result!.blocked.isEmpty, "benign tool call should not be blocked")
-        XCTAssertEqual(result!.allowed.count, 1)
-        XCTAssertEqual(result!.allowed.first?.toolName, "read_file")
+        XCTAssertTrue(try XCTUnwrap(result?.blocked.isEmpty), "benign tool call should not be blocked")
+        XCTAssertEqual(result?.allowed.count, 1)
+        XCTAssertEqual(result?.allowed.first?.toolName, "read_file")
     }
 
     func testInterceptResponseBlocked() throws {
-        try engine.initialize()
-
         let body = """
         {"content":[{"type":"tool_use","id":"t1","name":"write_file","input":{"file_path":"/etc/crontab","content":"evil"}}]}
         """
         let result = engine.interceptResponse(body: body)
         XCTAssertNotNil(result)
-        XCTAssertFalse(result!.blocked.isEmpty, "malicious tool call should be blocked")
+        XCTAssertFalse(try XCTUnwrap(result?.blocked.isEmpty), "malicious tool call should be blocked")
     }
 
     // MARK: - Validation
 
-    func testValidateYAMLValid() throws {
-        try engine.initialize()
-
+    func testValidateYAMLValid() {
         let yaml = """
         rules:
           - name: valid-rule
@@ -125,16 +97,14 @@ final class CrustKitTests: XCTestCase {
         XCTAssertNil(engine.validateYAML(yaml))
     }
 
-    func testValidateYAMLInvalid() throws {
-        try engine.initialize()
-
+    func testValidateYAMLInvalid() {
         let invalid = "not: valid: yaml: ["
         XCTAssertNotNil(engine.validateYAML(invalid))
     }
 
     // MARK: - Version
 
-    func testVersion() throws {
+    func testVersion() {
         let version = engine.version
         XCTAssertFalse(version.isEmpty, "version should not be empty")
     }
@@ -142,7 +112,6 @@ final class CrustKitTests: XCTestCase {
     // MARK: - Lifecycle
 
     func testShutdownAndReinit() throws {
-        try engine.initialize()
         XCTAssertGreaterThan(engine.ruleCount, 0)
 
         engine.shutdown()
@@ -154,14 +123,12 @@ final class CrustKitTests: XCTestCase {
 
     func testDoubleShutdown() {
         engine.shutdown()
-        engine.shutdown()  // should not crash
+        engine.shutdown() // should not crash
     }
 
     // MARK: - Mobile Virtual Path Rules
 
-    func testMobilePIIBlocked() throws {
-        try engine.initialize()
-
+    func testMobilePIIBlocked() {
         let tools: [(String, [String: String])] = [
             ("read_contacts", [:]),
             ("access_photos", [:]),
@@ -181,9 +148,7 @@ final class CrustKitTests: XCTestCase {
         }
     }
 
-    func testMobileHardwareBlocked() throws {
-        try engine.initialize()
-
+    func testMobileHardwareBlocked() {
         let tools: [String] = [
             "scan_bluetooth",
             "bluetooth_connect",
@@ -197,9 +162,7 @@ final class CrustKitTests: XCTestCase {
         }
     }
 
-    func testMobileBiometricBlocked() throws {
-        try engine.initialize()
-
+    func testMobileBiometricBlocked() {
         let tools: [String] = [
             "authenticate_biometric",
             "face_id",
@@ -212,9 +175,7 @@ final class CrustKitTests: XCTestCase {
         }
     }
 
-    func testMobilePurchaseBlocked() throws {
-        try engine.initialize()
-
+    func testMobilePurchaseBlocked() {
         let result = engine.evaluate(
             toolName: "purchase_item",
             arguments: ["product_id": "premium_monthly"]
@@ -225,9 +186,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertTrue(result2.matched, "in_app_purchase should be blocked")
     }
 
-    func testMobileKeychainBlocked() throws {
-        try engine.initialize()
-
+    func testMobileKeychainBlocked() {
         let result = engine.evaluate(
             toolName: "keychain_get",
             arguments: ["key": "api_token"]
@@ -235,9 +194,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertTrue(result.matched, "keychain_get should be blocked by protect-os-keychains")
     }
 
-    func testMobileClipboardReadBlocked() throws {
-        try engine.initialize()
-
+    func testMobileClipboardReadBlocked() {
         let readResult = engine.evaluate(toolName: "read_clipboard", arguments: [:])
         XCTAssertTrue(readResult.matched, "read_clipboard should be blocked")
 
@@ -245,9 +202,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertFalse(writeResult.matched, "write_clipboard should be allowed")
     }
 
-    func testMobileURLSchemeBlocked() throws {
-        try engine.initialize()
-
+    func testMobileURLSchemeBlocked() {
         // tel: should be blocked
         let telResult = engine.evaluate(
             toolName: "open_url",
@@ -270,9 +225,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertFalse(httpsResult.matched, "https: URL should be allowed")
     }
 
-    func testMobilePersistenceBlocked() throws {
-        try engine.initialize()
-
+    func testMobilePersistenceBlocked() {
         let result = engine.evaluate(
             toolName: "schedule_task",
             arguments: ["task_id": "sync_data"]
@@ -281,33 +234,27 @@ final class CrustKitTests: XCTestCase {
     }
 
     func testMobileInterceptResponseBlocked() throws {
-        try engine.initialize()
-
         let body = """
         {"content":[{"type":"tool_use","id":"m1","name":"read_contacts","input":{}}]}
         """
         let result = engine.interceptResponse(body: body)
         XCTAssertNotNil(result)
-        XCTAssertFalse(result!.blocked.isEmpty, "read_contacts should be blocked in interception")
+        XCTAssertFalse(try XCTUnwrap(result?.blocked.isEmpty), "read_contacts should be blocked in interception")
     }
 
     // MARK: - Local Proxy
 
     func testStartStopProxy() throws {
-        try engine.initialize()
-
         try engine.startProxy(port: 0, upstreamURL: "https://api.anthropic.com")
         XCTAssertNotNil(engine.proxyAddress, "proxy should be running")
         XCTAssertNotNil(engine.proxyBaseURL, "should have a base URL")
-        XCTAssertTrue(engine.proxyBaseURL!.absoluteString.hasPrefix("http://127.0.0.1:"))
+        XCTAssertTrue(try XCTUnwrap(engine.proxyBaseURL?.absoluteString.hasPrefix("http://127.0.0.1:")))
 
         engine.stopProxy()
         XCTAssertNil(engine.proxyAddress, "proxy should be stopped")
     }
 
     func testProxyDoubleStartFails() throws {
-        try engine.initialize()
-
         try engine.startProxy(port: 0, upstreamURL: "https://api.anthropic.com")
         defer { engine.stopProxy() }
 
@@ -328,15 +275,13 @@ final class CrustKitTests: XCTestCase {
         XCTAssertNil(engine.proxyBaseURL)
     }
 
-    func testStreamInterceptionNotYetSupported() {
-        XCTAssertFalse(engine.streamInterceptionSupported)
+    func testStreamInterceptionSupported() {
+        XCTAssertTrue(engine.streamInterceptionSupported)
     }
 
     // MARK: - Async API
 
-    func testEvaluateAsync() async throws {
-        try engine.initialize()
-
+    func testEvaluateAsync() async {
         let result = await engine.evaluateAsync(
             toolName: "read_file",
             arguments: ["path": "/tmp/test.txt"]
@@ -344,9 +289,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertFalse(result.matched, "reading /tmp/test.txt should be allowed")
     }
 
-    func testEvaluateAsyncBlocked() async throws {
-        try engine.initialize()
-
+    func testEvaluateAsyncBlocked() async {
         let result = await engine.evaluateAsync(
             toolName: "write_file",
             arguments: ["file_path": "/etc/crontab", "content": "evil"]
@@ -355,9 +298,7 @@ final class CrustKitTests: XCTestCase {
         XCTAssertNotNil(result.ruleName)
     }
 
-    func testEvaluateAsyncWithJSON() async throws {
-        try engine.initialize()
-
+    func testEvaluateAsyncWithJSON() async {
         let result = await engine.evaluateAsync(
             toolName: "read_file",
             argumentsJSON: #"{"path":"/tmp/safe.txt"}"#
@@ -366,19 +307,15 @@ final class CrustKitTests: XCTestCase {
     }
 
     func testInterceptResponseAsync() async throws {
-        try engine.initialize()
-
         let body = """
         {"content":[{"type":"tool_use","id":"t1","name":"write_file","input":{"file_path":"/etc/crontab","content":"evil"}}]}
         """
         let result = await engine.interceptResponseAsync(body: body)
         XCTAssertNotNil(result)
-        XCTAssertFalse(result!.blocked.isEmpty, "malicious tool call should be blocked")
+        XCTAssertFalse(try XCTUnwrap(result?.blocked.isEmpty), "malicious tool call should be blocked")
     }
 
-    func testValidateYAMLAsync() async throws {
-        try engine.initialize()
-
+    func testValidateYAMLAsync() async {
         let valid = """
         rules:
           - name: async-test
@@ -394,38 +331,93 @@ final class CrustKitTests: XCTestCase {
         XCTAssertNotNil(errorMsg, "invalid YAML should return error")
     }
 
+    // MARK: - Content Scanning
+
+    func testScanContentClean() {
+        let result = engine.scanContent("Hello, this is a normal message.")
+        XCTAssertFalse(result.matched, "clean content should not match")
+    }
+
+    func testScanContentSecret() {
+        // nosemgrep: generic.secrets.security.detected-github-token.detected-github-token -- fake token for DLP test
+        let result = engine.scanContent("Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12")
+        XCTAssertTrue(result.matched, "GitHub token should be detected")
+        XCTAssertNotNil(result.patternName)
+        XCTAssertNotNil(result.message)
+    }
+
+    func testScanContentVCard() {
+        let result = engine.scanContent("BEGIN:VCARD\nVERSION:3.0\nFN:John Doe\nEND:VCARD")
+        XCTAssertTrue(result.matched, "vCard should be detected")
+    }
+
+    func testScanContentAsync() async {
+        // nosemgrep: generic.secrets.security.detected-github-token.detected-github-token -- fake token for DLP test
+        let result = await engine.scanContentAsync("Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12")
+        XCTAssertTrue(result.matched, "GitHub token should be detected async")
+    }
+
+    func testScanOutbound() {
+        let result = engine.scanOutbound("My API key is ghp_TestSecretTokenForDLP00000000000000scan")
+        XCTAssertTrue(result.matched, "API key in outbound message should be detected")
+    }
+
+    // MARK: - URL Validation
+
+    func testValidateURLTelBlocked() {
+        let result = engine.validateURL("tel:+1234567890")
+        XCTAssertTrue(result.blocked, "tel: URL should be blocked")
+        XCTAssertEqual(result.scheme, "tel")
+    }
+
+    func testValidateURLHttpsAllowed() {
+        let result = engine.validateURL("https://example.com")
+        XCTAssertFalse(result.blocked, "https: URL should be allowed")
+        XCTAssertEqual(result.scheme, "https")
+    }
+
+    func testValidateURLSmsBlocked() {
+        let result = engine.validateURL("sms:+1234567890")
+        XCTAssertTrue(result.blocked, "sms: URL should be blocked")
+    }
+
+    func testValidateURLAsync() async {
+        let result = await engine.validateURLAsync("tel:+1234567890")
+        XCTAssertTrue(result.blocked, "tel: URL should be blocked async")
+    }
+
     // MARK: - CrustURLProtocol
 
-    func testURLProtocolCanInitMatchesConfiguredHosts() {
+    func testURLProtocolCanInitMatchesConfiguredHosts() throws {
         CrustURLProtocol.engine = engine
         CrustURLProtocol.interceptedHosts = ["api.anthropic.com", "api.openai.com"]
 
         // Should match configured hosts.
-        let anthropicReq = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        let anthropicReq = try URLRequest(url: XCTUnwrap(URL(string: "https://api.anthropic.com/v1/messages")))
         XCTAssertTrue(CrustURLProtocol.canInit(with: anthropicReq))
 
-        let openaiReq = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        let openaiReq = try URLRequest(url: XCTUnwrap(URL(string: "https://api.openai.com/v1/chat/completions")))
         XCTAssertTrue(CrustURLProtocol.canInit(with: openaiReq))
 
         // Should not match other hosts.
-        let otherReq = URLRequest(url: URL(string: "https://example.com/api")!)
+        let otherReq = try URLRequest(url: XCTUnwrap(URL(string: "https://example.com/api")))
         XCTAssertFalse(CrustURLProtocol.canInit(with: otherReq))
     }
 
-    func testURLProtocolSkipsWithoutEngine() {
+    func testURLProtocolSkipsWithoutEngine() throws {
         CrustURLProtocol.engine = nil
 
-        let req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        let req = try URLRequest(url: XCTUnwrap(URL(string: "https://api.anthropic.com/v1/messages")))
         XCTAssertFalse(CrustURLProtocol.canInit(with: req), "should skip without engine")
     }
 
-    func testURLProtocolDetectsAPIType() {
+    func testURLProtocolDetectsAPIType() throws {
         // The detectAPIType is private, so we test indirectly via canInit
         // and the interceptedHosts configuration.
         CrustURLProtocol.engine = engine
         CrustURLProtocol.interceptedHosts = ["api.anthropic.com"]
 
-        let req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        let req = try URLRequest(url: XCTUnwrap(URL(string: "https://api.anthropic.com/v1/messages")))
         XCTAssertTrue(CrustURLProtocol.canInit(with: req))
     }
 

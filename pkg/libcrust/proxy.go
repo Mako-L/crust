@@ -32,6 +32,20 @@ var proxy struct {
 	apiType  types.APIType
 }
 
+// proxyClient is a shared HTTP client for upstream requests.
+// Reusing the client enables TCP/TLS connection pooling.
+var proxyClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 120 * time.Second,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
 // maxResponseBody is the maximum response body size we'll buffer for
 // interception (16 MB). Responses larger than this are passed through
 // unmodified to avoid excessive memory use on mobile devices.
@@ -120,10 +134,41 @@ func ProxyAddress() string {
 	return proxy.listener.Addr().String()
 }
 
+// proxyConfig holds a snapshot of proxy configuration, taken under lock.
+type proxyConfig struct {
+	upstream *url.URL
+	apiKey   string
+	apiType  types.APIType
+}
+
+// snapshotProxyConfig reads proxy configuration under the lock.
+// Returns nil if the proxy is not configured (upstream is nil).
+func snapshotProxyConfig() *proxyConfig {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if proxy.upstream == nil {
+		return nil
+	}
+	// Copy the URL value so the caller doesn't share state.
+	u := *proxy.upstream
+	return &proxyConfig{
+		upstream: &u,
+		apiKey:   proxy.apiKey,
+		apiType:  proxy.apiType,
+	}
+}
+
 // proxyHandler forwards requests to upstream and intercepts responses.
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	// Snapshot config under lock to avoid data races with StopProxy.
+	cfg := snapshotProxyConfig()
+	if cfg == nil {
+		http.Error(w, "proxy not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Build upstream URL: base URL + request path + query.
-	target := *proxy.upstream
+	target := *cfg.upstream
 	target.Path = singleJoinSlash(target.Path, r.URL.Path)
 	target.RawQuery = r.URL.RawQuery
 
@@ -142,9 +187,15 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(bodyBytes, &reqBody)
 
 	// Detect API type from path if not configured.
-	at := proxy.apiType
+	at := cfg.apiType
 	if at == 0 {
 		at = detectAPITypeFromPath(r.URL.Path)
+	}
+
+	// If streaming, force non-streaming upfront — no need to send the
+	// streaming request first just to discard it.
+	if reqBody.Stream {
+		bodyBytes = forceNonStreaming(bodyBytes)
 	}
 
 	// Build upstream request.
@@ -161,54 +212,39 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	upReq.Host = target.Host
 
 	// Inject auth.
-	injectProxyAuth(upReq.Header, proxy.apiKey, at)
+	injectProxyAuth(upReq.Header, cfg.apiKey, at)
 
-	// Send to upstream.
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-			ResponseHeaderTimeout: 120 * time.Second,
-		},
-	}
-	resp, err := client.Do(upReq)
+	// Send to upstream (shared client for connection reuse).
+	resp, err := proxyClient.Do(upReq)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("upstream error: %v", err), http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if reqBody.Stream {
-		// Streaming: pass through SSE events directly.
-		// Tool call interception for streaming requires buffering the full
-		// stream, which we leave for a future enhancement.
-		streamPassthrough(w, resp)
-		return
-	}
-
-	// Non-streaming: read response, intercept, return.
+	// Read response, intercept, return.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
 	}
 
+	// If response exceeds maxResponseBody, pass through without interception
+	// to avoid excessive memory use on mobile devices.
+	oversized := len(respBody) > maxResponseBody
+
 	// Decompress if needed for inspection.
 	inspectBody := respBody
 	encoding := resp.Header.Get("Content-Encoding")
-	if encoding == "gzip" && len(respBody) > 2 {
+	if !oversized && encoding == "gzip" && len(respBody) > 2 {
 		if decompressed, err := decompressGzip(respBody); err == nil {
 			inspectBody = decompressed
 		}
 	}
 
-	// Intercept tool calls in successful responses.
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		mu.RLock()
-		i := interceptor
-		mu.RUnlock()
-
+	// Intercept tool calls in successful, non-oversized responses.
+	if !oversized && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		i := getInterceptor()
 		if i != nil {
 			result, err := i.InterceptToolCalls(inspectBody, security.InterceptionContext{
 				APIType:   at,
@@ -232,6 +268,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Write response back to client.
 	copyHeaders(w.Header(), resp.Header)
+	stripHopByHop(w.Header()) // strip hop-by-hop from response too
 	// Update Content-Length since body may have changed.
 	w.Header().Set("Content-Length", strconv.Itoa(len(respBody)))
 	w.WriteHeader(resp.StatusCode)
@@ -239,30 +276,8 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(respBody)
 }
 
-// streamPassthrough forwards an SSE stream from upstream to the client.
-func streamPassthrough(w http.ResponseWriter, resp *http.Response) {
-	copyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
-	flusher, canFlush := w.(http.Flusher)
-
-	buf := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter -- streaming proxy pass-through, not HTML
-			_, _ = w.Write(buf[:n])
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-}
-
 // detectAPITypeFromPath guesses API type from the request path.
+// NOTE: Keep in sync with CrustURLProtocol.detectAPIType(from:) in CrustKit.swift.
 func detectAPITypeFromPath(path string) types.APIType {
 	if strings.Contains(path, "/v1/messages") {
 		return types.APITypeAnthropic
@@ -322,6 +337,25 @@ func singleJoinSlash(base, extra string) string {
 	return base + extra
 }
 
+// forceNonStreaming returns a copy of the JSON body with "stream" set to false.
+// Preserves all other fields byte-for-byte via json.RawMessage.
+func forceNonStreaming(body []byte) []byte {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil || raw == nil {
+		return body // best-effort: return unchanged on parse failure
+	}
+	raw["stream"] = json.RawMessage("false")
+	// Also remove stream_options to avoid upstream errors.
+	delete(raw, "stream_options")
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(raw); err != nil {
+		return body
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n")
+}
+
 // decompressGzip decompresses a gzip'd byte slice.
 func decompressGzip(data []byte) ([]byte, error) {
 	r, err := gzip.NewReader(bytes.NewReader(data))
@@ -355,26 +389,8 @@ func EvaluateStream(responseBody string, apiType string) string {
 	return InterceptResponse(responseBody, apiType, "remove")
 }
 
-// --- Streaming interception (placeholder for future) ---
-
-// StreamCallback is called for each intercepted SSE event.
-// gomobile does not support function parameters, so streaming interception
-// will use a polling model or a separate listener in a future release.
-
-// startStreamInterceptor is a placeholder for future streaming support.
-// The planned approach:
-//   - Buffer content_block_start/delta/stop events
-//   - Reassemble complete tool calls
-//   - Evaluate each via the rule engine
-//   - Drop blocked tool_use content blocks from the stream
-//   - Forward allowed events with correct indexing
-//
-// This is non-trivial due to SSE framing, partial JSON deltas, and the
-// need to maintain backpressure. For now, streaming requests are passed
-// through without interception — use non-streaming mode for full security.
-
-// StreamInterceptionSupported returns false until streaming interception
-// is implemented.
+// StreamInterceptionSupported returns true — streaming requests are
+// transparently converted to non-streaming for full security evaluation.
 func StreamInterceptionSupported() bool {
-	return false
+	return true
 }

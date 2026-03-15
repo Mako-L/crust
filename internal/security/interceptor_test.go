@@ -1423,3 +1423,300 @@ func TestInterceptOpenAIResponses_NoToolCalls(t *testing.T) {
 		t.Error("response with no tool calls should be unchanged")
 	}
 }
+
+// --- Text-block DLP tests ---
+
+func TestAnthropicTextBlockDLP_SecretRedacted(t *testing.T) {
+	interceptor := createTestInterceptor(t, "")
+	content := []anthropicContentBlock{
+		{Type: "text", Text: "Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12"},
+	}
+	resp := createAnthropicResponse(content)
+
+	result, err := interceptor.InterceptAnthropicResponse(resp, anthropicCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed anthropicResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(parsed.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(parsed.Content))
+	}
+	if !strings.Contains(parsed.Content[0].Text, "[REDACTED by Crust:") {
+		t.Errorf("expected text to be redacted, got: %s", parsed.Content[0].Text)
+	}
+}
+
+func TestAnthropicTextBlockDLP_CleanPassThrough(t *testing.T) {
+	interceptor := createTestInterceptor(t, "")
+	content := []anthropicContentBlock{
+		{Type: "text", Text: "This is a perfectly normal message."},
+	}
+	resp := createAnthropicResponse(content)
+
+	result, err := interceptor.InterceptAnthropicResponse(resp, anthropicCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Clean text should pass through unchanged.
+	if !bytes.Equal(result.ModifiedResponse, resp) {
+		t.Error("clean text response should be unchanged")
+	}
+}
+
+func TestOpenAIContentDLP_SecretRedacted(t *testing.T) {
+	interceptor := createTestInterceptor(t, "")
+	resp := createOpenAIResponse(nil, "Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12")
+
+	result, err := interceptor.InterceptOpenAIResponse(resp, openaiCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed openAIResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(parsed.Choices) == 0 {
+		t.Fatal("expected at least one choice")
+	}
+	if !strings.Contains(parsed.Choices[0].Message.Content, "[REDACTED by Crust:") {
+		t.Errorf("expected content to be redacted, got: %s", parsed.Choices[0].Message.Content)
+	}
+}
+
+func TestOpenAIContentDLP_CleanPassThrough(t *testing.T) {
+	interceptor := createTestInterceptor(t, "")
+	resp := createOpenAIResponse(nil, "This is a perfectly normal message.")
+
+	result, err := interceptor.InterceptOpenAIResponse(resp, openaiCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !bytes.Equal(result.ModifiedResponse, resp) {
+		t.Error("clean text response should be unchanged")
+	}
+}
+
+func TestOpenAIResponsesDLP_SecretRedacted(t *testing.T) {
+	interceptor := createTestInterceptor(t, "")
+	output := []openAIResponsesOutputItem{
+		{
+			Type: "message",
+			ID:   "msg_1",
+			Content: []openAIResponsesContent{
+				{Type: "output_text", Text: "Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12"},
+			},
+		},
+	}
+	resp := createOpenAIResponsesResponse(output)
+
+	result, err := interceptor.InterceptOpenAIResponsesResponse(resp, responsesCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed openAIResponsesResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(parsed.Output) == 0 || len(parsed.Output[0].Content) == 0 {
+		t.Fatal("expected output content")
+	}
+	if !strings.Contains(parsed.Output[0].Content[0].Text, "[REDACTED by Crust:") {
+		t.Errorf("expected output_text to be redacted, got: %s", parsed.Output[0].Content[0].Text)
+	}
+}
+
+// --- E2E: DLP + tool blocking together, warning text not DLP-scanned ---
+
+// dlpTriggerMessage is a rule message that itself triggers the GitHub token DLP
+// pattern (ghp_ + 36 chars). If DLP scans the warning text containing this message,
+// the warning will be redacted — exactly the regression we're testing against.
+const dlpTriggerMessage = "Blocked ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+// TestAnthropicDLP_WarningNotRedacted verifies that Crust's own warning text blocks
+// (appended when tool calls are blocked) are never fed through DLP scanning.
+// Regression test: with the old (buggy) ordering (DLP after warning append),
+// the warning containing dlpTriggerMessage would be redacted. With the fix
+// (DLP before warning append), the warning passes through intact.
+func TestAnthropicDLP_WarningNotRedacted(t *testing.T) {
+	rulesYAML := `
+rules:
+  - name: block-env
+    block: "**/.env"
+    actions: [read]
+    message: "` + dlpTriggerMessage + `"
+    severity: critical
+`
+	interceptor := createTestInterceptor(t, rulesYAML)
+
+	content := []anthropicContentBlock{
+		{Type: "text", Text: "I'll read your config now."},
+		{Type: "tool_use", ID: "t1", Name: "read_file", Input: json.RawMessage(`{"path":"/home/user/.env"}`)},
+	}
+	resp := createAnthropicResponse(content)
+
+	result, err := interceptor.InterceptAnthropicResponse(resp, anthropicCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed anthropicResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Should have: original text block + warning block (tool_use removed).
+	if len(parsed.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(parsed.Content))
+	}
+	// The warning block should NOT be redacted — the DLP-triggering text is
+	// in Crust's own warning, which must not be scanned.
+	warningBlock := parsed.Content[1]
+	if strings.Contains(warningBlock.Text, "[REDACTED by Crust:") {
+		t.Errorf("Crust's warning block was incorrectly DLP-scanned and redacted: %s", warningBlock.Text)
+	}
+	if !strings.Contains(warningBlock.Text, dlpTriggerMessage) {
+		t.Errorf("warning should contain the rule message, got: %s", warningBlock.Text)
+	}
+}
+
+// TestAnthropicDLP_SecretInTextAndBlockedTool verifies both DLP (text redaction)
+// and tool blocking work correctly in the same response.
+func TestAnthropicDLP_SecretInTextAndBlockedTool(t *testing.T) {
+	rulesYAML := `
+rules:
+  - name: block-env
+    block: "**/.env"
+    actions: [read]
+    message: "Credential file access blocked"
+    severity: critical
+`
+	interceptor := createTestInterceptor(t, rulesYAML)
+
+	content := []anthropicContentBlock{
+		{Type: "text", Text: "Here is a token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12"},
+		{Type: "tool_use", ID: "t1", Name: "read_file", Input: json.RawMessage(`{"path":"/home/user/.env"}`)},
+	}
+	resp := createAnthropicResponse(content)
+
+	result, err := interceptor.InterceptAnthropicResponse(resp, anthropicCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed anthropicResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(result.BlockedToolCalls) != 1 {
+		t.Fatalf("expected 1 blocked tool call, got %d", len(result.BlockedToolCalls))
+	}
+
+	// Should have: redacted text block + warning block.
+	if len(parsed.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(parsed.Content))
+	}
+	// First block: text should be redacted by DLP.
+	if !strings.Contains(parsed.Content[0].Text, "[REDACTED by Crust:") {
+		t.Errorf("expected text block to be DLP-redacted, got: %s", parsed.Content[0].Text)
+	}
+	// Second block: warning should NOT be redacted.
+	if strings.Contains(parsed.Content[1].Text, "[REDACTED by Crust:") {
+		t.Errorf("warning block should not be DLP-redacted, got: %s", parsed.Content[1].Text)
+	}
+}
+
+// TestOpenAIDLP_WarningNotRedacted verifies OpenAI Chat path: DLP runs before
+// warning text is appended, so the DLP-triggering warning is never scanned.
+func TestOpenAIDLP_WarningNotRedacted(t *testing.T) {
+	rulesYAML := `
+rules:
+  - name: block-env
+    block: "**/.env"
+    actions: [read]
+    message: "` + dlpTriggerMessage + `"
+    severity: critical
+`
+	interceptor := createTestInterceptor(t, rulesYAML)
+
+	tc := makeOAIToolCall("t1", "read_file", `{"path":"/home/user/.env"}`)
+	resp := createOpenAIResponse([]openAIToolCall{tc}, "")
+
+	result, err := interceptor.InterceptOpenAIResponse(resp, openaiCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed openAIResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(parsed.Choices) == 0 {
+		t.Fatal("expected at least one choice")
+	}
+	// Warning text should be in content and NOT redacted.
+	content := parsed.Choices[0].Message.Content
+	if strings.Contains(content, "[REDACTED by Crust:") {
+		t.Errorf("Crust's warning was incorrectly DLP-scanned: %s", content)
+	}
+	if !strings.Contains(content, dlpTriggerMessage) {
+		t.Errorf("warning should contain the rule message, got: %s", content)
+	}
+}
+
+// TestOpenAIResponsesDLP_WarningNotRedacted verifies that warning output_text
+// blocks appended by Crust are not fed through DLP. Uses dlpTriggerMessage
+// to ensure the test would fail if DLP scanned the warning.
+func TestOpenAIResponsesDLP_WarningNotRedacted(t *testing.T) {
+	rulesYAML := `
+rules:
+  - name: block-env
+    block: "**/.env"
+    actions: [read]
+    message: "` + dlpTriggerMessage + `"
+    severity: critical
+`
+	interceptor := createTestInterceptor(t, rulesYAML)
+
+	output := []openAIResponsesOutputItem{
+		{
+			Type: contentTypeFunctionCall, ID: "fc1", CallID: "call_1",
+			Name: "read_file", Arguments: `{"path":"/home/user/.env"}`,
+		},
+	}
+	resp := createOpenAIResponsesResponse(output)
+
+	result, err := interceptor.InterceptOpenAIResponsesResponse(resp, responsesCtx(types.BlockModeRemove))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var parsed openAIResponsesResponse
+	if err := json.Unmarshal(result.ModifiedResponse, &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Should have the warning message item (function_call removed).
+	if len(parsed.Output) != 1 {
+		t.Fatalf("expected 1 output item, got %d", len(parsed.Output))
+	}
+	if len(parsed.Output[0].Content) == 0 {
+		t.Fatal("expected content in warning output item")
+	}
+	warningText := parsed.Output[0].Content[0].Text
+	if strings.Contains(warningText, "[REDACTED by Crust:") {
+		t.Errorf("Crust's warning was incorrectly DLP-scanned: %s", warningText)
+	}
+	if !strings.Contains(warningText, dlpTriggerMessage) {
+		t.Errorf("warning should contain the rule message, got: %s", warningText)
+	}
+}

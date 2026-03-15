@@ -20,7 +20,10 @@ package eventlog
 
 import (
 	"encoding/json"
+	"errors"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/BakeLens/crust/internal/logger"
 	"github.com/BakeLens/crust/internal/types"
@@ -63,6 +66,10 @@ type Event struct {
 	Direction string // "inbound" (client→server), "outbound" (server→client)
 	Method    string // JSON-RPC method name (e.g., "tools/call")
 	BlockType string // BlockTypeRule, BlockTypeDLP, BlockTypeSelfProtect, BlockTypeMalformed
+
+	// RecordedAt is set by Record() to the time the event was recorded.
+	// Used by SSE streaming to provide accurate event timestamps.
+	RecordedAt time.Time
 }
 
 // Metrics tracks blocking statistics for all layers.
@@ -135,9 +142,72 @@ var globalSink atomic.Value // stores Sink
 // SetSink sets the global event sink (called once during init by security.Manager).
 func SetSink(s Sink) { globalSink.Store(s) }
 
+// --- Live event subscriptions (for SSE streaming) ---
+
+// MaxSubscribers limits concurrent event stream connections to prevent resource exhaustion.
+const MaxSubscribers = 16
+
+// ErrTooManySubscribers is returned when the subscriber limit is reached.
+var ErrTooManySubscribers = errors.New("too many event subscribers")
+
+var (
+	subscribers sync.Map // map[uint64]chan Event
+	nextSubID   atomic.Uint64
+	subCount    atomic.Int32
+)
+
+// Subscribe registers a live event listener. Events are delivered on the returned
+// channel with best-effort semantics: if the subscriber is slow, events are dropped
+// (non-blocking send). Callers must call Unsubscribe when done.
+//
+// bufSize controls the channel buffer (clamped to minimum 1, recommended: 64).
+// Returns ErrTooManySubscribers if MaxSubscribers is reached.
+func Subscribe(bufSize int) (id uint64, ch <-chan Event, err error) {
+	// Atomic CAS loop to prevent TOCTOU race on subscriber count.
+	for {
+		cur := subCount.Load()
+		if cur >= int32(MaxSubscribers) {
+			return 0, nil, ErrTooManySubscribers
+		}
+		if subCount.CompareAndSwap(cur, cur+1) {
+			break
+		}
+	}
+	if bufSize < 1 {
+		bufSize = 1
+	}
+	c := make(chan Event, bufSize)
+	id = nextSubID.Add(1)
+	subscribers.Store(id, c)
+	return id, c, nil
+}
+
+// Unsubscribe removes a subscriber. The channel is NOT closed to avoid
+// send-on-closed-channel races with broadcast(). Callers should use context
+// cancellation to signal the subscriber goroutine to stop reading.
+func Unsubscribe(id uint64) {
+	if _, ok := subscribers.LoadAndDelete(id); ok {
+		subCount.Add(-1)
+	}
+}
+
+// broadcast sends an event to all subscribers. Slow subscribers are skipped
+// (non-blocking send) to prevent Record() from blocking.
+func broadcast(event Event) {
+	subscribers.Range(func(_, v any) bool {
+		select {
+		case v.(chan Event) <- event:
+		default: // drop if subscriber is slow
+		}
+		return true
+	})
+}
+
 // Record logs a security event to in-memory metrics and the configured sink.
 // This is the single entry point for recording security events across all layers.
 func Record(event Event) {
+	event.RecordedAt = time.Now().UTC()
+
 	// Infer defaults for backward compatibility.
 	if event.Protocol == "" {
 		switch event.Layer {
@@ -191,4 +261,7 @@ func Record(event Event) {
 	if s, ok := globalSink.Load().(Sink); ok && s != nil {
 		s.LogEvent(event)
 	}
+
+	// Broadcast to live subscribers (SSE streams).
+	broadcast(event)
 }

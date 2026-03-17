@@ -347,4 +347,17 @@ func LibcrustProxyAddress() (result *C.char) {
 	return C.CString(libcrust.ProxyAddress())
 }
 
+// =============================================================================
+// Agent Detection
+// =============================================================================
+
+// LibcrustDetectAgents scans for running AI agent processes and returns their
+// status as a JSON array. The caller must free the result with LibcrustFree.
+//
+//export LibcrustDetectAgents
+func LibcrustDetectAgents() (result *C.char) {
+	defer recoverErr(&result)
+	return C.CString(libcrust.DetectAgents())
+}
+
 func main() {}

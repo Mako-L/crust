@@ -16,6 +16,7 @@ import (
 
 	"github.com/BakeLens/crust/internal/daemon"
 	"github.com/BakeLens/crust/internal/daemon/registry"
+	"github.com/BakeLens/crust/internal/eventlog"
 )
 
 // protectState tracks the auto-protect lifecycle.
@@ -67,9 +68,17 @@ func StartProtect() (int, error) {
 	// Install Claude Code PreToolUse hook for direct tool call interception.
 	crustBin := daemon.ResolveCrustBin()
 	if crustBin != "" {
+		// Clean up stale hooks.json from the bug where hooks were written
+		// to the wrong file (should be in settings.json, not hooks.json).
+		cleanupStaleHooksFile()
+
 		if err := InstallClaudeHook(crustBin); err != nil {
 			// Non-fatal: Claude Code hooks are supplementary protection.
 			fmt.Fprintf(os.Stderr, "crust: install claude hook: %v\n", err)
+		} else {
+			// Mark Claude Code as protected — the hook provides tool call
+			// interception even when MCP config patching found nothing.
+			registry.Default.MarkPatched("Claude Code")
 		}
 	}
 
@@ -248,6 +257,25 @@ func handleEvalConn(conn net.Conn) {
 
 	result := Evaluate(req.ToolName, argsJSON)
 	conn.Write(append([]byte(result), '\n'))
+
+	// Record event for the GUI event stream and metrics.
+	var evalResult struct {
+		Matched  bool   `json:"matched"`
+		RuleName string `json:"rule_name"`
+		Action   string `json:"action"`
+	}
+	if json.Unmarshal([]byte(result), &evalResult) != nil {
+		return
+	}
+	eventlog.Record(eventlog.Event{
+		Layer:      eventlog.LayerHook,
+		ToolName:   req.ToolName,
+		Arguments:  req.ToolInput,
+		Protocol:   "Hook",
+		Direction:  "inbound",
+		WasBlocked: evalResult.Matched && evalResult.Action == "block",
+		RuleName:   evalResult.RuleName,
+	})
 }
 
 // stopEvalServer shuts down the internal evaluate server.

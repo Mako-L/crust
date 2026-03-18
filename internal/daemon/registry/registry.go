@@ -90,5 +90,17 @@ func (r *Registry) IsPatched(name string) bool {
 	return r.patched[name]
 }
 
+// MarkPatched marks a target as patched without calling Patch.
+// Used when protection is achieved through a mechanism other than
+// the target's own Patch function (e.g. Claude Code hook installation).
+func (r *Registry) MarkPatched(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.patched == nil {
+		r.patched = make(map[string]bool)
+	}
+	r.patched[name] = true
+}
+
 // Targets returns the registered targets (for testing).
 func (r *Registry) Targets() []Target { return r.targets }

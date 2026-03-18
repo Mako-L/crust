@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BakeLens/crust/internal/eventlog"
 	"github.com/BakeLens/crust/internal/plugin"
 	"github.com/BakeLens/crust/internal/rules"
 	"github.com/BakeLens/crust/internal/telemetry"
@@ -64,6 +65,15 @@ func Init(cfg Config) (*Manager, error) {
 
 	// Set global storage for telemetry
 	telemetry.SetGlobalStorage(storage)
+
+	// Seed in-memory metrics from persisted events (last 24h) so stats
+	// survive daemon restarts.
+	if counts, err := storage.GetLayerCounts(context.Background()); err == nil {
+		m := eventlog.GetMetrics()
+		for _, lc := range counts {
+			m.Seed(lc.Layer, lc.Blocked, lc.Count)
+		}
+	}
 
 	// Default block mode to "remove" if not specified
 	blockMode := cfg.BlockMode

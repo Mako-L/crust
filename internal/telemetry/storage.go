@@ -155,6 +155,37 @@ func (s *Storage) Queries() *db.Queries {
 	return s.queries
 }
 
+// LayerCount represents a row from the per-layer event count query.
+type LayerCount struct {
+	Layer   string
+	Blocked bool
+	Count   int64
+}
+
+// GetLayerCounts returns event counts grouped by layer and blocked status
+// for the last 24 hours. Used to seed in-memory metrics on startup.
+func (s *Storage) GetLayerCounts(ctx context.Context) ([]LayerCount, error) {
+	rows, err := s.conn.QueryContext(ctx,
+		`SELECT layer, was_blocked, COUNT(*) as cnt
+		 FROM tool_call_logs
+		 WHERE timestamp > datetime('now', '-24 hours')
+		 GROUP BY layer, was_blocked`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var counts []LayerCount
+	for rows.Next() {
+		var lc LayerCount
+		if err := rows.Scan(&lc.Layer, &lc.Blocked, &lc.Count); err != nil {
+			continue
+		}
+		counts = append(counts, lc)
+	}
+	return counts, rows.Err()
+}
+
 func (s *Storage) initSchema() error {
 	_, err := s.conn.ExecContext(context.Background(), inlineSchema)
 	if err != nil {

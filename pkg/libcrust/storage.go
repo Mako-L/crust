@@ -106,7 +106,24 @@ func InitStorage(dbPath string, encryptionKey string) error {
 		i.SetStorage(db)
 	}
 
+	// Seed in-memory metrics from persisted events so stats survive restarts.
+	seedMetricsFromDB(db)
+
 	return nil
+}
+
+// seedMetricsFromDB loads persisted event counts (last 24h) from SQLite
+// into the in-memory atomic counters so that stats survive process restarts.
+func seedMetricsFromDB(db *telemetry.Storage) {
+	counts, err := db.GetLayerCounts(ctx())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "crust: seed metrics: %v\n", err)
+		return
+	}
+	m := eventlog.GetMetrics()
+	for _, lc := range counts {
+		m.Seed(lc.Layer, lc.Blocked, lc.Count)
+	}
 }
 
 // CloseStorage shuts down the database. Safe to call if not initialized.

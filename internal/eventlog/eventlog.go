@@ -39,6 +39,7 @@ const (
 	LayerProxyBuffer   = "proxy_response_buffer" // Response-side buffered streaming
 	LayerStdioPipe     = "stdio_pipe"            // JSON-RPC stdio pipe inspection (ACP/MCP/autowrap)
 	LayerMCPHTTP       = "mcp_http"              // MCP Streamable HTTP gateway
+	LayerHook          = "hook"                  // PreToolUse hook evaluation (Claude Code, etc.)
 )
 
 // BlockType constants describe what caused a block.
@@ -87,12 +88,20 @@ type Metrics struct {
 	MCPHTTPBlocks  atomic.Int64
 	MCPHTTPAllowed atomic.Int64
 
+	// PreToolUse hooks (Claude Code, etc.)
+	HookBlocks  atomic.Int64
+	HookAllowed atomic.Int64
+
 	// Totals
 	TotalToolCalls atomic.Int64
 }
 
 // GetStats returns a copy of current metrics.
 func (m *Metrics) GetStats() map[string]int64 {
+	blocked := m.ProxyRequestBlocks.Load() + m.ProxyResponseBlocks.Load() +
+		m.StdioPipeBlocks.Load() + m.MCPHTTPBlocks.Load() + m.HookBlocks.Load()
+	allowed := m.ProxyResponseAllowed.Load() + m.StdioPipeAllowed.Load() +
+		m.MCPHTTPAllowed.Load() + m.HookAllowed.Load()
 	return map[string]int64{
 		"proxy_request_blocks":   m.ProxyRequestBlocks.Load(),
 		"proxy_response_blocks":  m.ProxyResponseBlocks.Load(),
@@ -101,7 +110,11 @@ func (m *Metrics) GetStats() map[string]int64 {
 		"stdio_pipe_allowed":     m.StdioPipeAllowed.Load(),
 		"mcp_http_blocks":        m.MCPHTTPBlocks.Load(),
 		"mcp_http_allowed":       m.MCPHTTPAllowed.Load(),
+		"hook_blocks":            m.HookBlocks.Load(),
+		"hook_allowed":           m.HookAllowed.Load(),
 		"total_tool_calls":       m.TotalToolCalls.Load(),
+		"blocked_tool_calls":     blocked,
+		"allowed_tool_calls":     allowed,
 	}
 }
 
@@ -112,6 +125,42 @@ func (m *Metrics) ProxyResponseBlockRate() float64 {
 		return 0
 	}
 	return float64(m.ProxyResponseBlocks.Load()) / float64(total) * 100
+}
+
+// Seed adds a historical count to the appropriate per-layer counter.
+// Used to restore metrics from persisted storage on startup.
+func (m *Metrics) Seed(layer string, blocked bool, count int64) {
+	switch layer {
+	case LayerProxyRequest:
+		if blocked {
+			m.ProxyRequestBlocks.Add(count)
+		}
+	case LayerProxyResponse, LayerProxyStream, LayerProxyBuffer:
+		if blocked {
+			m.ProxyResponseBlocks.Add(count)
+		} else {
+			m.ProxyResponseAllowed.Add(count)
+		}
+	case LayerStdioPipe:
+		if blocked {
+			m.StdioPipeBlocks.Add(count)
+		} else {
+			m.StdioPipeAllowed.Add(count)
+		}
+	case LayerMCPHTTP:
+		if blocked {
+			m.MCPHTTPBlocks.Add(count)
+		} else {
+			m.MCPHTTPAllowed.Add(count)
+		}
+	case LayerHook:
+		if blocked {
+			m.HookBlocks.Add(count)
+		} else {
+			m.HookAllowed.Add(count)
+		}
+	}
+	m.TotalToolCalls.Add(count)
 }
 
 // Reset clears all metrics (for testing).
@@ -253,6 +302,13 @@ func Record(event Event) {
 			m.MCPHTTPBlocks.Add(1)
 		} else {
 			m.MCPHTTPAllowed.Add(1)
+		}
+		m.TotalToolCalls.Add(1)
+	case LayerHook:
+		if event.WasBlocked {
+			m.HookBlocks.Add(1)
+		} else {
+			m.HookAllowed.Add(1)
 		}
 		m.TotalToolCalls.Add(1)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/BakeLens/crust/internal/fileutil"
 )
 
-const crustHookMarker = "crust-app evaluate-hook"
+const crustHookMarker = "evaluate-hook"
 
 // hooksFile represents the structure of ~/.claude/hooks.json.
 type hooksFile struct {

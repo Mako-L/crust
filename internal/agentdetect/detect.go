@@ -1,6 +1,8 @@
 package agentdetect
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -166,8 +168,31 @@ func Detect() []DetectedAgent {
 }
 
 // isRegistryPatched checks if the named agent was successfully patched by the daemon.
+// For Claude Code, also checks if the PreToolUse hook is installed in ~/.claude/hooks.json.
 func isRegistryPatched(name string) bool {
-	return registry.Default.IsPatched(name)
+	if registry.Default.IsPatched(name) {
+		return true
+	}
+	// Claude Code is protected via PreToolUse hook even when MCP patching
+	// returns ErrNothingPatched (no MCP servers in config to wrap).
+	if name == "Claude Code" {
+		return isClaudeHookInstalled()
+	}
+	return false
+}
+
+// isClaudeHookInstalled checks if ~/.claude/hooks.json contains a crust PreToolUse hook.
+func isClaudeHookInstalled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "hooks.json"))
+	if err != nil {
+		return false
+	}
+	// Quick string check — avoids JSON parsing overhead in the hot path.
+	return strings.Contains(string(data), "evaluate-hook")
 }
 
 // cleanExePath strips self-update rename suffixes (e.g. ".old.1773623400727")

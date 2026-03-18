@@ -5,25 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/BakeLens/crust/internal/fileutil"
 )
 
 const mcpBackupSuffix = ".crust-mcp-backup"
-
-// CrustBinaryPath returns the absolute path to the running crust binary.
-func CrustBinaryPath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(resolved)
-}
 
 // PatchResult summarizes what PatchConfigs did.
 type PatchResult struct {

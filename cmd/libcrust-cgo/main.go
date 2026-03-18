@@ -381,6 +381,105 @@ func LibcrustRestoreAgents() {
 }
 
 // =============================================================================
+// Auto-Protect
+// =============================================================================
+
+// LibcrustStartProtect starts the full protection stack (proxy + agent patching).
+// Returns nil on success, or an error string.
+//
+//export LibcrustStartProtect
+func LibcrustStartProtect() (result *C.char) {
+	defer recoverErr(&result)
+	port, err := libcrust.StartProtect()
+	if err != nil {
+		return C.CString(err.Error())
+	}
+	_ = port
+	return nil
+}
+
+// LibcrustStopProtect tears down the full protection stack.
+//
+//export LibcrustStopProtect
+func LibcrustStopProtect() {
+	defer func() { recover() }() //nolint:errcheck
+	libcrust.StopProtect()
+}
+
+// LibcrustProtectPort returns the proxy port, or 0 if not running.
+//
+//export LibcrustProtectPort
+func LibcrustProtectPort() (port C.int) {
+	defer func() {
+		if r := recover(); r != nil {
+			port = 0
+		}
+	}()
+	return C.int(libcrust.ProtectPort())
+}
+
+// LibcrustProtectStatus returns the current protection status as JSON.
+//
+//export LibcrustProtectStatus
+func LibcrustProtectStatus() (result *C.char) {
+	defer recoverErr(&result)
+	return C.CString(libcrust.ProtectStatus())
+}
+
+// LibcrustListAgents returns all registered agents with status as JSON.
+//
+//export LibcrustListAgents
+func LibcrustListAgents() (result *C.char) {
+	defer recoverErr(&result)
+	return C.CString(libcrust.ListAgents())
+}
+
+// LibcrustEnableAgent patches a single agent by name.
+//
+//export LibcrustEnableAgent
+func LibcrustEnableAgent(name *C.char) (result *C.char) {
+	defer recoverErr(&result)
+	if err := libcrust.EnableAgent(C.GoString(name)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+// LibcrustDisableAgent restores a single agent by name.
+//
+//export LibcrustDisableAgent
+func LibcrustDisableAgent(name *C.char) (result *C.char) {
+	defer recoverErr(&result)
+	if err := libcrust.DisableAgent(C.GoString(name)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+// LibcrustInstallClaudeHook installs the PreToolUse hook in ~/.claude/hooks.json.
+// crustBin is the path to the crust/GUI binary that handles "evaluate-hook".
+//
+//export LibcrustInstallClaudeHook
+func LibcrustInstallClaudeHook(crustBin *C.char) (result *C.char) {
+	defer recoverErr(&result)
+	if err := libcrust.InstallClaudeHook(C.GoString(crustBin)); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+// LibcrustUninstallClaudeHook removes crust hooks from ~/.claude/hooks.json.
+//
+//export LibcrustUninstallClaudeHook
+func LibcrustUninstallClaudeHook() (result *C.char) {
+	defer recoverErr(&result)
+	if err := libcrust.UninstallClaudeHook(); err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
+// =============================================================================
 // Wrap (stdio proxy)
 // =============================================================================
 

@@ -25,6 +25,8 @@ func init() {
 	// ── MCP clients ───────────────────────────────────────────────────────────
 	// New MCP clients are added to internal/mcpdiscover/clients.go and
 	// automatically appear here via BuiltinClients().
+	// Go 1.22+ loop variables are per-iteration, so closures safely capture
+	// the correct client definition for each iteration.
 	for _, c := range mcpdiscover.BuiltinClients() {
 		Register(&FuncTarget{
 			AgentName:   c.ClientName(),

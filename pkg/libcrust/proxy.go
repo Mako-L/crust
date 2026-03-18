@@ -70,15 +70,19 @@ func StartProxy(port int, upstreamURL string, apiKey string, apiType string) err
 		return fmt.Errorf("proxy already running on %s", proxy.listener.Addr())
 	}
 
-	u, err := url.Parse(upstreamURL)
-	if err != nil {
-		return fmt.Errorf("invalid upstream URL: %w", err)
-	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("upstream URL must use http or https scheme, got %q", u.Scheme)
+	if upstreamURL != "" {
+		u, err := url.Parse(upstreamURL)
+		if err != nil {
+			return fmt.Errorf("invalid upstream URL: %w", err)
+		}
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return fmt.Errorf("upstream URL must use http or https scheme, got %q", u.Scheme)
+		}
+		proxy.upstream = u
+	} else {
+		proxy.upstream = nil // auto mode
 	}
 
-	proxy.upstream = u
 	proxy.apiKey = apiKey
 	proxy.apiType = parseAPIType(apiType)
 
@@ -142,20 +146,19 @@ type proxyConfig struct {
 }
 
 // snapshotProxyConfig reads proxy configuration under the lock.
-// Returns nil if the proxy is not configured (upstream is nil).
+// Returns nil if the proxy is not running at all.
 func snapshotProxyConfig() *proxyConfig {
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
-	if proxy.upstream == nil {
-		return nil
+	if proxy.server == nil {
+		return nil // proxy not running at all
 	}
-	// Copy the URL value so the caller doesn't share state.
-	u := *proxy.upstream
-	return &proxyConfig{
-		upstream: &u,
-		apiKey:   proxy.apiKey,
-		apiType:  proxy.apiType,
+	if proxy.upstream != nil {
+		// Copy the URL value so the caller doesn't share state.
+		u := *proxy.upstream
+		return &proxyConfig{upstream: &u, apiKey: proxy.apiKey, apiType: proxy.apiType}
 	}
+	return &proxyConfig{upstream: nil, apiKey: proxy.apiKey, apiType: proxy.apiType}
 }
 
 // proxyHandler forwards requests to upstream and intercepts responses.
@@ -163,14 +166,28 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Snapshot config under lock to avoid data races with StopProxy.
 	cfg := snapshotProxyConfig()
 	if cfg == nil {
-		http.Error(w, "proxy not configured", http.StatusServiceUnavailable)
+		http.Error(w, "proxy not running", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Build upstream URL: base URL + request path + query.
-	target := *cfg.upstream
-	target.Path = singleJoinSlash(target.Path, r.URL.Path)
-	target.RawQuery = r.URL.RawQuery
+	// Build upstream URL: fixed upstream or auto-resolve from request path.
+	var target url.URL
+	if cfg.upstream != nil {
+		// Fixed upstream mode.
+		target = *cfg.upstream
+		target.Path = singleJoinSlash(target.Path, r.URL.Path)
+		target.RawQuery = r.URL.RawQuery
+	} else {
+		// Auto mode: resolve upstream from request path.
+		resolved := resolveUpstreamFromPath(r.URL.Path)
+		if resolved == nil {
+			http.Error(w, "cannot resolve upstream for path: "+r.URL.Path, http.StatusBadGateway)
+			return
+		}
+		target = *resolved
+		target.Path = singleJoinSlash(target.Path, r.URL.Path)
+		target.RawQuery = r.URL.RawQuery
+	}
 
 	// Read request body.
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxResponseBody))
@@ -286,6 +303,31 @@ func detectAPITypeFromPath(path string) types.APIType {
 		return types.APITypeOpenAIResponses
 	}
 	return types.APITypeOpenAICompletion
+}
+
+// resolveUpstreamFromPath determines the upstream API URL from the request path.
+// It maps common AI API paths to their providers:
+//
+//	/v1/messages → Anthropic (api.anthropic.com)
+//	/v1/chat/completions → OpenAI (api.openai.com)
+//	/v1/responses → OpenAI (api.openai.com)
+func resolveUpstreamFromPath(path string) *url.URL {
+	var upstream string
+	if strings.Contains(path, "/v1/messages") {
+		upstream = "https://api.anthropic.com"
+	} else if strings.Contains(path, "/v1/chat/completions") ||
+		strings.Contains(path, "/v1/responses") ||
+		strings.Contains(path, "/v1/embeddings") {
+		upstream = "https://api.openai.com"
+	} else {
+		// Default to OpenAI for unknown paths.
+		upstream = "https://api.openai.com"
+	}
+	u, err := url.Parse(upstream)
+	if err != nil {
+		return nil
+	}
+	return u
 }
 
 // injectProxyAuth sets authentication headers.

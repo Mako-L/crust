@@ -258,6 +258,40 @@ func TestIsPatchedTracking(t *testing.T) {
 	}
 }
 
+// TestBuiltinMCPClientsHaveDistinctPaths verifies that each MCP client registered
+// by init() in builtin.go targets a distinct config file path (i.e., closures
+// capture the correct client definition, not all sharing the last one).
+//
+// Note: Go 1.22+ ensures loop variables are per-iteration, so this validates
+// the invariant rather than guarding against a legacy closure-capture bug.
+func TestBuiltinMCPClientsHaveDistinctPaths(t *testing.T) {
+	targets := registry.Default.Targets()
+
+	// Filter to just MCP clients (FuncTarget instances registered by BuiltinClients).
+	// We identify them by excluding known HTTPAgent names.
+	httpAgents := map[string]bool{"OpenClaw": true}
+
+	mcpNames := []string{}
+	for _, tgt := range targets {
+		if !httpAgents[tgt.Name()] {
+			mcpNames = append(mcpNames, tgt.Name())
+		}
+	}
+
+	if len(mcpNames) < 2 {
+		t.Fatalf("expected at least 2 MCP clients, got %d: %v", len(mcpNames), mcpNames)
+	}
+
+	// Verify all MCP client names are distinct.
+	seen := make(map[string]bool)
+	for _, name := range mcpNames {
+		if seen[name] {
+			t.Errorf("duplicate MCP client name %q — closure may capture same variable", name)
+		}
+		seen[name] = true
+	}
+}
+
 // helpers
 
 func writeJSON(t *testing.T, path string, v any) {

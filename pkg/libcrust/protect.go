@@ -94,7 +94,11 @@ func StartProtect() (int, error) {
 	protect.evalPort = evalPort
 
 	// Write eval port so hook processes can find the running instance.
-	writePortFile(evalPort)
+	// Skip when evalPort is 0 (server failed to start) to avoid writing
+	// a zero port that would cause hook processes to connect to nothing.
+	if evalPort > 0 {
+		writePortFile(evalPort)
+	}
 
 	return port, nil
 }
@@ -246,7 +250,7 @@ func handleEvalConn(conn net.Conn) {
 		ToolInput json.RawMessage `json:"tool_input"`
 	}
 	if json.Unmarshal(line, &req) != nil || req.ToolName == "" {
-		conn.Write([]byte(`{"matched":false}` + "\n"))
+		_, _ = conn.Write([]byte(`{"matched":false}` + "\n"))
 		return
 	}
 
@@ -256,7 +260,7 @@ func handleEvalConn(conn net.Conn) {
 	}
 
 	result := Evaluate(req.ToolName, argsJSON)
-	conn.Write(append([]byte(result), '\n'))
+	_, _ = conn.Write(append([]byte(result), '\n'))
 
 	// Record event for the GUI event stream and metrics.
 	var evalResult struct {

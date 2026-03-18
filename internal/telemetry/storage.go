@@ -186,6 +186,25 @@ func (s *Storage) GetLayerCounts(ctx context.Context) ([]LayerCount, error) {
 	return counts, rows.Err()
 }
 
+// Stats24h holds aggregated counts for the last 24 hours from SQLite.
+type Stats24h struct {
+	Blocked int64 `json:"blocked"`
+	Total   int64 `json:"total"`
+}
+
+// Get24hStats returns blocked and total tool call counts from the last 24 hours.
+// Unlike in-memory metrics, this always reflects the current sliding window.
+func (s *Storage) Get24hStats(ctx context.Context) (Stats24h, error) {
+	var st Stats24h
+	row := s.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) as total,
+		        COALESCE(SUM(CASE WHEN was_blocked THEN 1 ELSE 0 END), 0) as blocked
+		 FROM tool_call_logs
+		 WHERE timestamp > datetime('now', '-24 hours')`)
+	err := row.Scan(&st.Total, &st.Blocked)
+	return st, err
+}
+
 func (s *Storage) initSchema() error {
 	_, err := s.conn.ExecContext(context.Background(), inlineSchema)
 	if err != nil {
@@ -895,6 +914,58 @@ func (s *Storage) GetRecentLogs(ctx context.Context, minutes int, limit int) ([]
 	}
 
 	return logs, nil
+}
+
+// GetRecentBlockedLogs returns only blocked events (was_blocked=1) from the
+// given time window. This avoids the issue where allowed events push blocked
+// events past the LIMIT boundary.
+func (s *Storage) GetRecentBlockedLogs(ctx context.Context, minutes int, limit int) ([]ToolCallLog, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if minutes <= 0 {
+		minutes = 60
+	} else if minutes > MaxRecentMinutes {
+		minutes = MaxRecentMinutes
+	}
+
+	rows, err := s.conn.QueryContext(ctx,
+		`SELECT id, timestamp, trace_id, session_id, tool_name, tool_arguments,
+		        api_type, was_blocked, blocked_by_rule, model, layer,
+		        protocol, direction, method, block_type
+		 FROM tool_call_logs
+		 WHERE timestamp > datetime('now', ?) AND was_blocked = 1
+		 ORDER BY timestamp DESC
+		 LIMIT ?`,
+		fmt.Sprintf("-%d minutes", minutes), limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get blocked logs: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []ToolCallLog
+	for rows.Next() {
+		var d db.ToolCallLog
+		if err := rows.Scan(
+			&d.ID, &d.Timestamp, &d.TraceID, &d.SessionID,
+			&d.ToolName, &d.ToolArguments, &d.ApiType, &d.WasBlocked,
+			&d.BlockedByRule, &d.Model, &d.Layer,
+			&d.Protocol, &d.Direction, &d.Method, &d.BlockType,
+		); err != nil {
+			return nil, err
+		}
+		logs = append(logs, dbToolCallLogToToolCallLog(&d))
+	}
+	return logs, rows.Err()
+}
+
+// ClearAllEvents deletes all rows from tool_call_logs.
+func (s *Storage) ClearAllEvents(ctx context.Context) (int64, error) {
+	result, err := s.conn.ExecContext(ctx, `DELETE FROM tool_call_logs`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // MaxRetentionDays is the maximum allowed retention period

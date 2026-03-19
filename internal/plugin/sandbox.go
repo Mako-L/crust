@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/BakeLens/crust/internal/rules"
+	"github.com/gobwas/glob"
 )
 
 // ResourcePolicy defines resource limits for sandboxed processes.
@@ -154,8 +155,9 @@ func (r *ResourcePolicy) validate() error {
 	return nil
 }
 
-// Evaluate builds a sandbox policy from the request.
-// Returns nil (allow) — the policy is available for future exec-time wrapping.
+// Evaluate builds a sandbox policy from the request and checks req.Paths
+// against the policy's deny rules. The engine's extractor already extracted
+// paths (including from interpreter code), so we just match them here.
 func (s *SandboxPlugin) Evaluate(ctx context.Context, req Request) *Result {
 	if req.Command == "" {
 		return nil // not an executable tool call
@@ -173,7 +175,26 @@ func (s *SandboxPlugin) Evaluate(ctx context.Context, req Request) *Result {
 		}
 	}
 
-	return nil // allow — policy built successfully
+	// Check extracted paths against policy deny rules.
+	// req.Paths comes from the engine's extractor (handles interpreter
+	// code, shell parsing, variable expansion, etc.).
+	for _, rule := range policy.Rules {
+		if len(rule.Patterns) == 0 {
+			continue
+		}
+		for _, path := range req.Paths {
+			if matchesDenyRule(rule, path) {
+				return &Result{
+					RuleName: "sandbox:" + rule.Name,
+					Severity: rules.SeverityCritical,
+					Action:   rules.ActionBlock,
+					Message:  fmt.Sprintf("Sandbox policy denies access to %q (rule %q)", path, rule.Name),
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *SandboxPlugin) Close() error { return nil }
@@ -440,4 +461,34 @@ func operationsToStrings(ops []rules.Operation) []string {
 		}
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Interpreter evasion detection
+// ---------------------------------------------------------------------------
+
+// matchesDenyRule checks if a path matches any of the rule's deny patterns
+// and is not excluded by the rule's except patterns. Uses the same glob
+// library (gobwas/glob) as the rule engine's Matcher.
+func matchesDenyRule(rule DenyRule, path string) bool {
+	for _, pattern := range rule.Patterns {
+		g, err := glob.Compile(pattern, '/')
+		if err != nil {
+			continue
+		}
+		if g.Match(path) {
+			// Check exceptions.
+			for _, exc := range rule.Except {
+				eg, err := glob.Compile(exc, '/')
+				if err != nil {
+					continue
+				}
+				if eg.Match(path) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
 }

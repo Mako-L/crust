@@ -428,16 +428,26 @@ func TestStripLeadingVersion(t *testing.T) {
 // setupTestProxy creates a proxy pointed at the given upstream, with security enabled.
 func setupTestProxy(t *testing.T, upstream *httptest.Server) *Proxy {
 	t.Helper()
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
 	return p
 }
 
-// setupSecurityWithRules sets up the global security manager with the given rules.
-// Returns a cleanup function to restore original state.
-func setupSecurityWithRules(t *testing.T, yamlRules string) func() {
+// setupTestProxyWithInterceptor creates a proxy with an injected interceptor for security tests.
+func setupTestProxyWithInterceptor(t *testing.T, upstream *httptest.Server, interceptor *security.Interceptor) *Proxy {
+	t.Helper()
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, interceptor, security.InterceptionConfig{})
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	return p
+}
+
+// setupSecurityWithRules creates a rules engine and interceptor from YAML rules.
+// Returns the interceptor and a cleanup function.
+func setupSecurityWithRules(t *testing.T, yamlRules string) (*security.Interceptor, func()) {
 	t.Helper()
 
 	// Write rules to temp directory
@@ -461,13 +471,10 @@ func setupSecurityWithRules(t *testing.T, yamlRules string) func() {
 		t.Fatalf("NewStorage: %v", err)
 	}
 
-	// Create interceptor and lightweight manager
+	// Create interceptor
 	interceptor := security.NewInterceptor(engine, storage)
-	mgr := security.NewManagerForTest(interceptor)
-	security.SetGlobalManager(mgr)
 
-	return func() {
-		security.SetGlobalManager(nil)
+	return interceptor, func() {
 		storage.Close()
 	}
 }
@@ -480,7 +487,7 @@ func TestLayer0_AnthropicToolUseInContent(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cleanup := setupSecurityWithRules(t, `
+	interceptor, cleanup := setupSecurityWithRules(t, `
 rules:
   - block: "**/.ssh/id_*"
     actions: [read]
@@ -488,7 +495,7 @@ rules:
 `)
 	defer cleanup()
 
-	proxy := setupTestProxy(t, upstream)
+	proxy := setupTestProxyWithInterceptor(t, upstream, interceptor)
 
 	body := map[string]any{
 		"model":      "claude-3-opus-20240229",
@@ -538,7 +545,7 @@ func TestLayer0_OpenAIToolCallsBlocked(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cleanup := setupSecurityWithRules(t, `
+	interceptor, cleanup := setupSecurityWithRules(t, `
 rules:
   - block: "**/.ssh/id_*"
     actions: [read]
@@ -546,7 +553,7 @@ rules:
 `)
 	defer cleanup()
 
-	proxy := setupTestProxy(t, upstream)
+	proxy := setupTestProxyWithInterceptor(t, upstream, interceptor)
 
 	body := map[string]any{
 		"model": "gpt-4",
@@ -588,7 +595,7 @@ func TestLayer0_AnthropicTextContentNotBlocked(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cleanup := setupSecurityWithRules(t, `
+	interceptor, cleanup := setupSecurityWithRules(t, `
 rules:
   - block: "**/.ssh/id_*"
     actions: [read]
@@ -596,7 +603,7 @@ rules:
 `)
 	defer cleanup()
 
-	proxy := setupTestProxy(t, upstream)
+	proxy := setupTestProxyWithInterceptor(t, upstream, interceptor)
 
 	body := map[string]any{
 		"model":      "claude-3-opus-20240229",
@@ -626,7 +633,7 @@ func TestLayer0_AnthropicSafeToolUseNotBlocked(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	cleanup := setupSecurityWithRules(t, `
+	interceptor, cleanup := setupSecurityWithRules(t, `
 rules:
   - block: "**/.ssh/id_*"
     actions: [read]
@@ -634,7 +641,7 @@ rules:
 `)
 	defer cleanup()
 
-	proxy := setupTestProxy(t, upstream)
+	proxy := setupTestProxyWithInterceptor(t, upstream, interceptor)
 
 	body := map[string]any{
 		"model":      "claude-3-opus-20240229",
@@ -793,26 +800,6 @@ func TestStreamingRequest_StripsHopByHopHeaders(t *testing.T) {
 	}
 	if receivedHeaders.Get("Trailer") != "" {
 		t.Error("hop-by-hop header 'Trailer' should be stripped in streaming mode")
-	}
-}
-
-// Test: escapeJSON must not return raw unescaped strings on error.
-func TestEscapeJSON_SpecialCharacters(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{`hello`, `hello`},
-		{`say "hi"`, `say \"hi\"`},
-		{`path\to\file`, `path\\to\\file`},
-		{`line1` + "\n" + `line2`, `line1\nline2`},
-		{"", ""},
-	}
-	for _, tt := range tests {
-		got := escapeJSON(tt.input)
-		if got != tt.want {
-			t.Errorf("escapeJSON(%q) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }
 
@@ -1139,7 +1126,7 @@ func TestAgent_DeepSeek_NonStreaming_HopByHop(t *testing.T) {
 func TestAgent_Anthropic_StreamingContent_EscapeJSON(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		// Content with quotes, backslashes, newlines — exercises escapeJSON
+		// Content with quotes, backslashes, newlines — exercises JSON escaping
 		events := []string{
 			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n",
 			`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n",
@@ -1323,7 +1310,7 @@ func TestRetryAsNonStreaming_IndependentOfClientContext(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false)
+	proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -1378,7 +1365,7 @@ func TestRetryAsNonStreaming_ErrorStatusCodes(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false)
+			proxy, err := NewProxy(upstream.URL, "", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 			if err != nil {
 				t.Fatalf("NewProxy: %v", err)
 			}
@@ -1502,7 +1489,7 @@ func TestBug_SSEReader_MultipleDataLines(t *testing.T) {
 
 	var capturedContent string
 	reader := NewSSEReaderWithSecurity(body, types.APITypeOpenAICompletion,
-		"t", "s", "m",
+		"t", "s", "m", nil,
 		func(in, out int64, content string, toolCalls []telemetry.ToolCall) {
 			capturedContent = content
 		})
@@ -1543,7 +1530,7 @@ func TestBug_BufferedStreamingLosesNon200StatusCode(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1689,7 +1676,7 @@ func TestAgent_ClaudeCode_BufferedStreaming_MultiDataLine(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1786,7 +1773,7 @@ func TestAgent_OpenAI_BufferOverflow_RetriesNonStreaming(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1964,7 +1951,7 @@ func TestBufferedStreaming_CRLFSeparators(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2026,7 +2013,7 @@ func TestBufferedStreaming_TrailingEvent(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false)
+	p, err := NewProxy(upstream.URL, "test-key", 30*time.Second, nil, false, nil, security.InterceptionConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2219,7 +2206,7 @@ func TestProcessNonStreamingResponse_Success(t *testing.T) {
 	}
 
 	body, inTok, outTok, toolCalls := processNonStreamingResponse(
-		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4",
+		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4", nil, security.InterceptionConfig{},
 	)
 
 	if body == nil {
@@ -2246,7 +2233,7 @@ func TestProcessNonStreamingResponse_WithToolCalls(t *testing.T) {
 	}
 
 	body, inTok, outTok, toolCalls := processNonStreamingResponse(
-		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4",
+		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4", nil, security.InterceptionConfig{},
 	)
 
 	if body == nil {
@@ -2276,7 +2263,7 @@ func TestProcessNonStreamingResponse_ErrorStatus(t *testing.T) {
 	}
 
 	body, inTok, outTok, toolCalls := processNonStreamingResponse(
-		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4",
+		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4", nil, security.InterceptionConfig{},
 	)
 
 	if string(body) != errorBody {
@@ -2301,7 +2288,7 @@ func TestProcessNonStreamingResponse_ErrorBodyTruncation(t *testing.T) {
 	}
 
 	body, _, _, _ := processNonStreamingResponse(
-		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4",
+		resp, types.APITypeOpenAICompletion, "trace-1", "sess-1", "gpt-4", nil, security.InterceptionConfig{},
 	)
 
 	if int64(len(body)) != 1*1024*1024 {
@@ -2319,7 +2306,7 @@ func TestProcessNonStreamingResponse_Anthropic(t *testing.T) {
 	}
 
 	body, inTok, outTok, toolCalls := processNonStreamingResponse(
-		resp, types.APITypeAnthropic, "trace-1", "sess-1", "claude-sonnet-4-5-20250929",
+		resp, types.APITypeAnthropic, "trace-1", "sess-1", "claude-sonnet-4-5-20250929", nil, security.InterceptionConfig{},
 	)
 
 	if body == nil {
@@ -2383,7 +2370,7 @@ func TestForceNonStreaming_InvalidJSON(t *testing.T) {
 // Security interception: blocked tool calls are removed when security is active.
 func TestProcessNonStreamingResponse_SecurityInterception(t *testing.T) {
 	// Set up security rules that block "Bash" tool
-	cleanup := setupSecurityWithRules(t, `
+	interceptor, cleanup := setupSecurityWithRules(t, `
 rules:
   - name: block-bash
     match:
@@ -2400,7 +2387,7 @@ rules:
 	}
 
 	body, _, _, toolCalls := processNonStreamingResponse(
-		resp, types.APITypeOpenAICompletion, "trace-sec", "sess-sec", "gpt-4",
+		resp, types.APITypeOpenAICompletion, "trace-sec", "sess-sec", "gpt-4", interceptor, security.InterceptionConfig{},
 	)
 
 	if body == nil {
